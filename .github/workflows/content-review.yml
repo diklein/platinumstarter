@@ -1,0 +1,116 @@
+name: Content Review
+
+on:
+  pull_request:
+    paths:
+      - 'src/content/**/*.mdx'
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  review:
+    # Skips on a fork or a clone without the keys: every step is gated on this flag.
+    env:
+      HAS_KEYS: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+    name: Static content checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        if: env.HAS_KEYS == 'true'
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        if: env.HAS_KEYS == 'true'
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - run: npm ci
+        if: env.HAS_KEYS == 'true'
+
+      - name: Get changed MDX files
+        if: env.HAS_KEYS == 'true'
+        id: changed
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          FILES=$(git diff --name-only origin/$BASE_REF...HEAD -- 'src/content/**/*.mdx' | tr '\n' ' ')
+          echo "files=$FILES" >> $GITHUB_OUTPUT
+
+      - name: Run content review
+        if: env.HAS_KEYS == 'true'
+        id: review
+        env:
+          CHANGED_FILES: ${{ steps.changed.outputs.files }}
+        run: |
+          REPORT=$(echo "$CHANGED_FILES" | xargs node scripts/content-review.mjs)
+          DELIMITER=$(openssl rand -hex 16)
+          echo "report<<${DELIMITER}" >> $GITHUB_OUTPUT
+          echo "$REPORT" >> $GITHUB_OUTPUT
+          echo "${DELIMITER}" >> $GITHUB_OUTPUT
+
+      - name: Post review comment
+        if: env.HAS_KEYS == 'true'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: content-review
+          message: ${{ steps.review.outputs.report }}
+
+  fix:
+    # Skips on a fork or a clone without the keys: every step is gated on this flag.
+    env:
+      HAS_KEYS: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+    name: Auto-generate alt text
+    needs: review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        if: env.HAS_KEYS == 'true'
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        if: env.HAS_KEYS == 'true'
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - run: npm ci
+        if: env.HAS_KEYS == 'true'
+
+      - name: Get changed MDX files
+        if: env.HAS_KEYS == 'true'
+        id: changed
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          FILES=$(git diff --name-only origin/$BASE_REF...HEAD -- 'src/content/**/*.mdx' | tr '\n' ' ')
+          echo "files=$FILES" >> $GITHUB_OUTPUT
+
+      - name: Generate alt text for changed MDX files
+        if: env.HAS_KEYS == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CHANGED_FILES: ${{ steps.changed.outputs.files }}
+        run: |
+          if [ -n "$CHANGED_FILES" ]; then
+            echo "$CHANGED_FILES" | xargs node scripts/generate-alt-text.mjs
+          else
+            echo "generate-alt-text: no changed MDX files — nothing to do."
+          fi
+
+      - name: Auto-commit generated alt text
+        if: env.HAS_KEYS == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          commit_message: "fix(content): auto-generate alt text for images [skip ci]"
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"

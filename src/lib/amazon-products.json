@@ -1,0 +1,3 @@
+{
+  "_comment": "ASIN -> card details for bare-link ProductCards. The remark plugin only knows the ASIN; the MDX ProductCard mapping fills in whatever this map knows. Explicit props in MDX always win. Add an entry per ASIN as bare links get used in posts: { \"title\", \"description\", \"image\" }."
+}

@@ -1,0 +1,9 @@
+{
+  "promptDelete": false,
+  "showUnsupportedFiles": true,
+  "newFileLocation": "folder",
+  "newFileFolderPath": "src/content/writing/drafts",
+  "attachmentFolderPath": "public/images/writing",
+  "useMarkdownLinks": true,
+  "newLinkFormat": "relative"
+}

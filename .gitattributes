@@ -1,0 +1,12 @@
+# The synced photo snapshot (src/lib/synced-photos.json) is written by the photo sync
+# workflow; never hand-resolve it. On any merge conflict, keep OUR version; the workflow
+# re-syncs it on its next run. Requires the local merge driver (set once per clone):
+#   git config merge.ours.driver true
+src/lib/synced-photos.json merge=ours
+
+# Private to this repository, never part of the public template. `git archive` (which
+# qa/publish.mjs uses to build the export) drops everything marked export-ignore.
+qa/                    export-ignore
+docs/starter-*.md      export-ignore
+docs/archive/          export-ignore
+.claude/settings.json  export-ignore

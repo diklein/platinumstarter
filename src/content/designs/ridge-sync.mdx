@@ -1,0 +1,52 @@
+---
+type: design
+date: "2026-07-01"
+slug: ridge-sync
+title: "Ridge sync. Three words for where a note is."
+description: "An example case study with a video hero. Every note in Ridge is on this device, sending, or everywhere. Three states, one place they appear, and words chosen so a lost signal never reads as lost work."
+role: "Designer"
+company: "Ridge, a two-person app (fictional)"
+year: "2026"
+toc: false
+example: true
+---
+
+<GifVideo noProgress src="/images/designs/example-sync-hero.mp4" alt="A slow push-in over a placeholder composition, standing in for the sync status animation" />
+
+Ridge is a fictional notes app for people who are offline more often than not. It used to say so in four different ways, in four places. Now every note is in one of three states, the words are the same everywhere, and a lost signal never reads as lost work.
+
+<DesignDetails role="Designer" company="Ridge (fictional)" year="2026" platform="iOS, Android, web" tools="Figma, Principle" />
+
+<PullQuote attribution="From a fictional email">I wrote forty notes on the ridge and the app says it lost them. It did not lose them; it was waiting for me to get home.</PullQuote>
+
+## Three states
+
+1. On this device. Saved here, not yet sent.
+2. Sending. A signal is available and the note is on its way.
+3. Everywhere. On the server and on every signed-in device.
+
+There is no error state. A failed send returns the note to *on this device* and tries again. You are never asked to do anything about the network.
+
+<ImageRow images={[
+  { src: "/images/designs/example-sync-row-1.png", alt: "The on-this-device state, as a placeholder composition" },
+  { src: "/images/designs/example-sync-row-2.png", alt: "The sending state, as a placeholder composition" },
+  { src: "/images/designs/example-sync-row-3.png", alt: "The everywhere state, as a placeholder composition" }
+]} />
+
+## One place
+
+A small line under the note's title, and a count in the list header when any are waiting: "12 notes on this device". The indicators in the toolbar, the settings screen, and the sync sheet are gone. Removing them was most of the work.
+
+![The three states in the note list, as a placeholder composition, 1920 by 1080 pixels](/images/designs/example-sync-states.png "The list header counts waiting notes; each row names its own state")
+
+## The words
+
+"On this device" replaced "unsynced", "pending", "offline", and "local", which were all in the app at once. It is longer, and it is calmer. Read on a ridge with no signal, it says your notes are safe, and they are.
+
+## The detail that mattered
+
+The first version showed "sending" on every note the moment a signal appeared: a screen of spinners for a minute on a slow connection. Now the header carries the count and only the note being sent shows its own state. Prototype on the network people have, not the one at home.
+
+## Credits
+
+Ridge is fictional, and so are the two people who make it. This study opts out of the table of contents with `toc: false` in its frontmatter, the right call for a short study.

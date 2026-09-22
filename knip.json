@@ -1,0 +1,18 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "src/content/**/*.mdx"
+  ],
+  "ignore": [
+    ".obsidian/**",
+    ".planning/**",
+    "scripts/**",
+    "src/components/home/hero-beacon.tsx",
+    "src/components/ui/**",
+    "qa/**"
+  ],
+  "ignoreExportsUsedInFile": true,
+  "ignoreDependencies": [
+    "@resvg/resvg-js"
+  ]
+}

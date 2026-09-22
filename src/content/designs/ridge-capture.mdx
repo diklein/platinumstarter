@@ -1,0 +1,54 @@
+---
+type: design
+date: "2026-06-01"
+slug: ridge-capture
+title: "Ridge capture. One tap, and the note is yours."
+description: "An example case study for Ridge, a fictional notes app for the outdoors. Capture saves before you look up: one tap opens it, one tap keeps it, and the place, the time, and the weather are already there. Everything here is invented to show the template."
+role: "Designer"
+company: "Ridge, a two-person app (fictional)"
+year: "2026"
+toc: true
+example: true
+---
+
+![The redesigned Ridge capture screen, shown as a placeholder composition, 2500 by 1600 pixels](/images/designs/example-capture-hero.png)
+
+Ridge is a fictional notes app for people who work outdoors. A bird does not wait for a form, so capture had to become something you could do without looking down. Now it is one tap to open and one tap to keep, and the place, the time, and the weather are already in the note. Everything here is invented; the shape of the write-up is the point.
+
+<DesignDetails role="Designer" company="Ridge (fictional)" year="2026" platform="iOS, Android" tools="Figma, a paper notebook, TestFlight" />
+
+## Save first
+
+The note exists the moment you tap. Empty, timestamped, located. Everything you add after that is an edit to something already safe, so looking up costs nothing.
+
+<BlinkComparator
+  a="/images/designs/example-capture-before.png"
+  b="/images/designs/example-capture-after.png"
+  altA="The original two-screen capture flow, as a placeholder composition"
+  altB="The redesigned single-screen capture, as a placeholder composition"
+  width={1600}
+  height={1000}
+  caption="Hover or tap to flip between the old flow and the new one"
+/>
+
+The old flow asked for the species, the count, the location, and a photo, in that order, on two screens, before it would save. It was designed for a desk at the end of the day. In the field, people typed the species, looked up, lost the bird, and closed the app.
+
+## It already knows
+
+Location and weather are filled in, not asked for. The phone knew both; the old flow asked anyway. The species field takes a partial name and resolves it later, against your own recent list first. A photo is an attachment, not a step: the camera is one tap from the note, and the note does not wait for it.
+
+![The capture flow, from the first tap to a saved note, as a placeholder composition, 1920 by 1080 pixels](/images/designs/example-capture-flow.png "Tap, the note exists, add detail if you want to")
+
+![The capture screen on a phone, as a placeholder composition, 1200 by 1500 pixels](/images/designs/example-capture-phone.png "portrait|The saved note, with the optional fields below the fold")
+
+## Twelve seconds
+
+From opening the app to a saved note: twelve seconds, down from forty-one. Fewer than one note in ten is abandoned now; it was one in three. People record more, and most of what they record is short, which is the point.
+
+## The detail that mattered
+
+The first build saved the note but did not say so. People tapped, saw nothing change, and tapped again. A checkmark that fades over a second fixed it. It should have been in the prototype; we had tested at a desk, where nobody looks away.
+
+## Credits
+
+Ridge is fictional, and so are the two people who make it. On a real study, name the people and link to them.
