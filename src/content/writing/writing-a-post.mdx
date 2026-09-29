@@ -1,0 +1,159 @@
+---
+type: article
+date: "2026-08-03"
+slug: writing-a-post
+title: "Writing a post"
+description: "The frontmatter fields, then every prose element the article template styles: headings, lists, links, a pull quote, a table, code blocks, and a footnote written the GitHub way."
+tags: [platinum, writing]
+toc: true
+example: true
+---
+
+A post is one MDX file in `src/content/writing/`. The block at the top is the frontmatter; everything under it is markdown, with the site's components available as tags when you need them. This post uses every prose element the template styles, so it reads as a checklist as much as an article.
+
+<ProductCard strip="Update">This is the card for corrections and post-publication updates: a `ProductCard` with a `strip` and a sentence, nothing else. It renders wherever you put it, but the convention is the top of the post, right under the frontmatter.</ProductCard>
+
+## Frontmatter
+
+The first three fields are required. The loader skips a file that lacks any of them and prints a warning at build time.
+
+```yaml title="src/content/writing/writing-a-post.mdx"
+---
+type: article
+date: "2026-08-03"
+slug: writing-a-post
+title: "Writing a post"
+description: "A hand-written meta description, 150 to 160 characters."
+tags: [platinum, writing]
+toc: true
+example: true
+---
+```
+
+- `type` is one of `article`, `note`, `photo`, or `link`. Articles show a reading time and carry the BlogPosting structured data; the others are lighter.
+- `date` is the publish date, quoted, ISO 8601. Quoting matters: an unquoted date parses as a Date object and breaks the sort.
+- `slug` becomes the URL, `/writing/<slug>`. Lowercase letters, digits, and hyphens.
+- `title` is optional. Leave it out on a `note`, which the index shows as its full text instead of a headline.
+- `description` feeds the meta description and the social card. Leave it out and the first paragraph stands in, or run `node scripts/generate-seo.mjs` to have one written.
+- `tags` are lowercased on load and become hashtag pages.
+- `toc: true` renders a table of contents from the h2 and h3 headings. Reserve it for long posts.
+- `image` sets the lead image for social cards. Without it the first image in the body is used.
+- `imageBorders: true` puts a hairline around every image in the post, for screenshots with white edges.
+- `example: true` marks the file as example content for `npm run clear-examples`. Real posts never carry it.
+
+## Headings
+
+Use `##` for sections and `###` for subsections. The h1 is the post title, rendered by the page, so the body never contains one. Headings are sentence case: capitalize the first word and proper nouns, nothing else.
+
+### A subsection
+
+Subsections are for a step inside a section. A change of subject is a new section, and a post that needs a fourth level is two posts.
+
+## Lists
+
+Short items scan best tight, and the template tightens them automatically when each item averages under a dozen words:
+
+- Write the post
+- Add the images
+- Push
+
+Longer items get more air between them, without any markup on your part. The rule is per-item density, so a long list of short labels stays tight:
+
+- The excerpt shown in the index is derived from the first paragraph, so the opening sentence should stand on its own without the title.
+- Bare Amazon product links on a line of their own become product cards. Every other link is a plain link.
+- Absolute links to this site's own origin are rewritten to relative paths at build time, so they keep working when the domain changes.
+
+Numbered lists are for sequences where the order carries meaning:
+
+1. Draft in Obsidian.
+2. Run `node scripts/content-review.mjs` for a second opinion.
+3. Commit and push.
+
+## Links and emphasis
+
+An [inline link](https://developer.mozilla.org/en-US/docs/Web/HTML) is written the usual way. Links to other posts are site-relative, like [the images post](/writing/images-and-captions). Emphasis is *italic* for a term used as a term and **bold** for the rare phrase that must not be skimmed past. Inline `code` is for identifiers, file names, and commands.
+
+The template hangs an opening curly quote into the margin, so a paragraph that begins with a quotation lines up with the paragraphs around it:
+
+“Typography is the craft of endowing human language with a durable visual form.” That sentence opens Robert Bringhurst's *The Elements of Typographic Style*, and the hanging punctuation here is the kind of detail he means.
+
+## Quotes
+
+An ordinary quotation is a markdown blockquote, set in the muted color with a rule on the left:
+
+> Good typography is invisible until it is bad, at which point it is the only thing you notice.
+
+The one quotation a post turns on can be a pull quote instead. Pass the words without quote marks; the component supplies them.
+
+<PullQuote attribution="From the Platinum design notes">Write the post you would want to find. Everything else is furniture.</PullQuote>
+
+## Tables
+
+Tables are plain GitHub-flavored markdown. They scroll horizontally on narrow screens rather than breaking the layout.
+
+| Field | Required | Example |
+| --- | --- | --- |
+| `type` | yes | `article` |
+| `date` | yes | `"2026-08-03"` |
+| `slug` | yes | `writing-a-post` |
+| `title` | no | `"Writing a post"` |
+| `tags` | no | `[platinum, writing]` |
+
+## Footnotes
+
+A footnote is a GitHub-flavored marker in the text[^1] and a matching definition anywhere in the file, usually at the end.[^2] The definitions are collected into a section at the bottom of the post with back-links to where each marker sits.
+
+## Rules
+
+Three hyphens on a line make a section rule: a quiet horizontal line for a change of scene inside a section.
+
+---
+
+The rule above is one. Use it sparingly; a heading is usually the better break.
+
+## Code
+
+Code is a fenced block with a language tag. Highlighting happens at build time, so the page ships no highlighter, and every block carries a copy button in its top-right corner that copies the code without any line numbers. Long lines wrap rather than scroll, so a block is never wider than the column.
+
+```ts
+export function slugify(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+}
+```
+
+Add `title="..."` after the language and the block gets a header band with the file name, where the copy button then lives permanently. `showLineNumbers` adds a gutter; use it only when the prose refers to lines by number.
+
+```ts title="src/lib/slugify.ts" showLineNumbers
+export function slugify(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+}
+```
+
+A block tagged `diff` highlights added and removed lines. Keep the context to a few lines around the change.
+
+```diff
+ export function slugify(title: string): string {
+   return title
+     .toLowerCase()
+-    .replace(/\s+/g, '-')
++    .replace(/[^a-z0-9]+/g, '-')
++    .replace(/^-|-$/g, '')
+ }
+```
+
+## Live components
+
+Any component registered in `mdx-components.tsx` can be dropped into a post as a tag. Most take props (the image, video, and card posts cover those). A few take none: these two draw the site's own icon set, so what you see is what the header and footer are using.
+
+<IconFamiliesDemo />
+
+<IconChaosDemo />
+
+[^1]: The marker is `[^1]` in the sentence, and the number is only a label: footnotes are numbered in the order they are first referenced, and the label can be any word.
+[^2]: The definition is `[^2]: text` on its own line. It can hold links and emphasis, but keep it to a sentence or two; a long footnote is a section that lost its heading.

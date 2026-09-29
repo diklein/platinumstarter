@@ -1,0 +1,42 @@
+name: Newsletter digest (Buttondown)
+
+on:
+  schedule:
+    - cron: '0 15 * * 6' # Saturdays 15:00 UTC (~8am Pacific) — weekly digest of new posts
+  workflow_dispatch:      # Allow manual trigger from the GitHub Actions UI
+
+jobs:
+  draft:
+    # Skips on a fork or a clone without the keys: every step is gated on this flag.
+    env:
+      HAS_KEYS: ${{ secrets.BUTTONDOWN_API_KEY != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        if: env.HAS_KEYS == 'true'
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        if: env.HAS_KEYS == 'true'
+        with:
+          node-version: '24'
+
+      - name: Draft one combined Buttondown email for posts since the last run
+        if: env.HAS_KEYS == 'true'
+        env:
+          BUTTONDOWN_API_KEY: ${{ secrets.BUTTONDOWN_API_KEY }}
+          # The live origin the digest links to. A repository variable (Settings > Secrets and
+          # variables > Actions > Variables); identity.url in site.config.ts is the fallback.
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: node scripts/create-newsletter-drafts.mjs
+
+      - name: Record digested posts
+        if: env.HAS_KEYS == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'chore(newsletter): record digested posts [skip ci]'
+          file_pattern: scripts/newsletter-emailed.json

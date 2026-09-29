@@ -1,0 +1,23 @@
+{
+  "autoSaveInterval": 10,
+  "autoPushInterval": 10,
+  "autoPullInterval": 10,
+  "autoPullOnBoot": true,
+  "pullBeforePush": true,
+  "differentIntervalCommitAndPush": false,
+  "autoBackupAfterFileChange": false,
+  "commitMessage": "content(vault): {{numFiles}} files changed, {{date}}",
+  "autoCommitMessage": "content(vault): {{numFiles}} files changed, {{date}}",
+  "commitDateFormat": "YYYY-MM-DD HH:mm",
+  "listChangedFilesInMessageBody": true,
+  "disablePopups": false,
+  "disablePopupsForNoChanges": true,
+  "showStatusBar": true,
+  "showBranchStatusBar": true,
+  "changedFilesInStatusBar": true,
+  "refreshSourceControl": true,
+  "syncMethod": "merge",
+  "disablePush": false,
+  "updateSubmodules": false,
+  "showFileMenu": true
+}

@@ -1,0 +1,37 @@
+---
+title: About
+description: What Platinum is, what it ships with, and how to make it yours.
+example: true
+---
+
+This is Platinum, a kit for a personal site you manage with AI. You write in Markdown or just ask, the agent edits the files, and a `git push` publishes.
+
+This page is an example About page. Replace the words in `src/content/about.mdx` with your own, and everything around them (the portrait, the profile directory, the colophon) comes from `site.config.ts`.
+
+## What ships
+
+- Writing: articles, photo posts, and notes in MDX, with images, video, slideshows, code blocks, footnotes, an RSS feed, and a markdown rendition of every page. The four example posts are the reference for all of it.
+- Photos: a folder of images in the repo, or an account on Unsplash, Glass, Pixelfed, Immich, or PhotoPrism, with EXIF and a lightbox.
+- Modules you can turn on in one line: design case studies, books, podcasts, an archive, and hashtags.
+
+## Skills
+
+Seven skills ship with the kit. Each is a Markdown file in `.claude/skills/` that Claude Code, Codex, Cursor, or Gemini CLI reads.
+
+- `setup`: make the site yours, one question at a time, by editing the config file.
+- `new-post`: write an article, photo post, note, or link post with the right frontmatter.
+- `edit-post`: change a post that exists: a typo, a title, an image, a date, its URL.
+- `new-page`: add a page that is not a post, with the shell, the footer, and a nav entry.
+- `publish`: move a draft out, check it, commit, push, and report the live URL.
+- `import`: bring an old blog over from WordPress, Squarespace, Ghost, Substack, Medium, Tumblr, Blogger, a Markdown folder, or a feed.
+- `craft`: the site's design rules as a checklist, applied to every visual change.
+
+## Photography
+
+<PhotoCollageCard />
+
+The card above shows the six most recent photos and disappears while there are none. The eight on this demo are by Unsplash photographers, credited in their captions. Yours replace them as soon as you add a folder or connect an account.
+
+## This website
+
+Built with Next.js, Tailwind CSS, and shadcn/ui, hosted on Vercel, and written in Obsidian or any editor that saves Markdown. There is no CMS. The settings panel edits one config file in development, and every post is a file in the repository that a push publishes.

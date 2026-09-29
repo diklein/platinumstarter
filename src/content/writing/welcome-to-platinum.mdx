@@ -1,0 +1,40 @@
+---
+type: article
+date: "2026-08-01"
+slug: welcome-to-platinum
+title: "Welcome to Platinum"
+description: "What this site is, how publishing works (write, commit, push), and the two ways to change anything about it: the /settings page and Claude Code."
+tags: [platinum, publishing]
+example: true
+---
+
+<TlDr>
+
+Platinum is a personal site you manage with AI and publish with a git push. Write in Obsidian or any editor, commit, push, and the post is live. Everything on this untouched clone is example content, tagged so one command removes it.
+
+</TlDr>
+
+This is Platinum: a personal site for writing and photographs, with design work and a few other sections one config line away. There is no CMS and no database. A post is a Markdown file in the repository, and pushing that file publishes it.
+
+## The publish loop
+
+1. Write a post as an MDX file in `src/content/writing/`. Obsidian is the intended editor, but any editor works, and `npm run new-post` scaffolds the frontmatter for you.
+2. Drop images next to the post under `public/images/writing/`.
+3. Commit and push. The site rebuilds and the post is live at its slug.
+
+The scripts for the tedious parts (alt text, SEO descriptions, a content review) run on demand or before a push. You can publish without any of them.
+
+## Two ways to change the site
+
+- The settings page. In development, `/settings` edits `site.config.ts`: your name, the tagline, which sections exist, which social networks appear. Everything about you reads from that one file.
+- Claude Code, or any agent that reads `AGENTS.md`. Say "turn off the photos section", "add a reading list page", or "change the accent color". The conventions are checked in, and the agent reads them before it edits.
+
+## About the example content
+
+Every post and photo on a fresh clone is a labelled example. Each one shows a part of the writing vocabulary, so they double as reference material when you or an agent write the real thing. When you are ready to start from empty:
+
+```bash
+npm run clear-examples
+```
+
+It removes every file tagged `example: true` in its frontmatter, the media those files reference, and the example photos (eight photographs by Unsplash photographers, credited in their captions), and prints what it took away. Add `--dry-run` to see the list first.

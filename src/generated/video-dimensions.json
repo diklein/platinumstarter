@@ -1,0 +1,18 @@
+{
+  "/images/designs/example-sync-hero.mp4": {
+    "w": 1920,
+    "h": 1080
+  },
+  "/images/writing/example-clip-portrait.mp4": {
+    "w": 720,
+    "h": 1280
+  },
+  "/images/writing/example-clip.mp4": {
+    "w": 1280,
+    "h": 720
+  },
+  "/images/writing/example-loop.mp4": {
+    "w": 1200,
+    "h": 750
+  }
+}

@@ -1,0 +1,53 @@
+name: Sync photos
+
+on:
+  schedule:
+    - cron: '0 9 * * *' # Daily at 09:00 UTC (~2am Pacific): each sync commit deploys and wipes the edge cache for every static route, so 2-hourly runs kept long-tail pages permanently cold (the desktop FCP/TTFB regression). Once daily, in the overnight lull, lets the cache stay warm through the day.
+  workflow_dispatch:       # Allow manual trigger from GitHub Actions UI
+
+jobs:
+  sync:
+    # Skips on a fork or a clone without any photo-service key: every step is gated on this flag.
+    env:
+      HAS_KEYS: ${{ secrets.UNSPLASH_ACCESS_KEY != '' || secrets.PIXELFED_TOKEN != '' || secrets.IMMICH_API_KEY != '' || secrets.PHOTOPRISM_TOKEN != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        if: env.HAS_KEYS == 'true'
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        if: env.HAS_KEYS == 'true'
+        with:
+          node-version: '24'
+
+      # Every source in site.photos.sources (see docs/photo-sources.md); a secret that a source
+      # does not need can stay unset. A failing source keeps its committed photos and the step
+      # still fails, so the run shows red without dropping the others' updates.
+      - name: Fetch photos
+        if: env.HAS_KEYS == 'true'
+        env:
+          UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
+          PIXELFED_TOKEN: ${{ secrets.PIXELFED_TOKEN }}
+          IMMICH_API_KEY: ${{ secrets.IMMICH_API_KEY }}
+          PHOTOPRISM_TOKEN: ${{ secrets.PHOTOPRISM_TOKEN }}
+        run: node scripts/fetch-photos.mjs
+
+      - name: Check for changes
+        if: env.HAS_KEYS == 'true'
+        id: diff
+        run: |
+          git diff --quiet src/lib/synced-photos.json \
+            && echo "changed=false" >> $GITHUB_OUTPUT \
+            || echo "changed=true" >> $GITHUB_OUTPUT
+
+      - name: Commit and push if photos changed
+        if: steps.diff.outputs.changed == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'content(photos): sync photo sources'
+          file_pattern: src/lib/synced-photos.json

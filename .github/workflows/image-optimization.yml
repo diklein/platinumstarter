@@ -1,0 +1,35 @@
+name: Image Optimization
+
+on:
+  pull_request:
+    paths:
+      - 'public/**/*.jpg'
+      - 'public/**/*.jpeg'
+      - 'public/**/*.png'
+      - 'public/**/*.webp'
+      - 'public/**/*.avif'
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Optimize JPEG/PNG/WebP/AVIF
+        uses: calibreapp/image-actions@main
+        with:
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          compressOnly: true
+
+      - name: Commit optimized images
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'chore(images): optimize with calibreapp + gifsicle [skip ci]'
+          file_pattern: 'public/**'

@@ -1,0 +1,1748 @@
+'use client'
+
+import { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react'
+import { flushSync } from 'react-dom'
+import { ChevronLeft, ChevronRight, X } from 'lucide-react'
+import Image from 'next/image'
+import * as m from 'motion/react-m'
+import { useMotionValue, useTransform, animate, useReducedMotion } from 'motion/react'
+import { useTheme } from 'next-themes'
+import type { UnsplashPhoto } from '@/lib/unsplash-photos'
+import { formatExif, photoSourceLink } from '@/lib/unsplash-photos'
+import { SPRING as HOUSE_SPRING, SPRING_REDUCED, SPRING_SLOW } from '@/lib/motion'
+
+// Should the clicked clip keep PLAYING while it flies into the modal?
+//
+// TRUE (the shipped behaviour): the flying clone is a second live <video> that resumes from the
+// origin's exact frame, so the clip never stops moving as it travels into the modal.
+//
+// FALSE: the clone is the FROZEN frame instead (flightPoster, a canvas snapshot of the clicked
+// frame). Identical pixels, no video element inside the animating layer; the clip just does not
+// advance during the flight. The handoff is frame-accurate either way, because the modal clip
+// starts from photo.videoTime — the same frame the clone starts from — and both play at 1x, so
+// they stay together without anything having to reconcile them (see LightboxVideo).
+//
+// Kept as a switch because it was the prime suspect for a Safari-only white flash on click. It is
+// NOT the cause: the flash survived flipping this off. (The real ones: the clone painting frame 0
+// before its seek landed, and the page fade starting before the clone was on screen.)
+const FLY_LIVE_VIDEO = true
+
+// Every spring here is THE house spring (src/lib/motion.ts). The drag settle, the fly-in open and
+// the left/right nav used to be three separately hand-tuned springs whose natural frequencies ran
+// from 19 to 30 rad/s — so the same gesture "felt" like a different object depending on which one
+// you touched. Overshoot is a percentage of the distance travelled, so one spring serves an 8px
+// settle and an 800px flight alike; there is no reason for them to differ.
+const SPRING = HOUSE_SPRING           // drag / swipe settle back to centre
+/* The fly-in's PER-UNIT rest thresholds. motion declares a spring complete inside
+ * restDelta and SNAPS to the end value; the default (0.01) is calibrated for pixel
+ * tracks, but on the flight's SCALE tracks 1% of a ~1350px-wide photo is a visible
+ * teleport at the far edge — with transform-origin 0 0 it all lands on the right and
+ * bottom, the measured "photo dips from the lower-right corner at the end of the
+ * open" (burst-frame audit, 2026-08-26: right edge 1375 → 1373 → 1377 → 1373).
+ * Sub-pixel thresholds let the overshoot render its full tail — alive, no skipped
+ * pixels — and completion (animDone → the clone handoff) now fires at true visual
+ * rest, so the clone drop cuts between still frames. */
+const OPEN_SPRING_SCALE = { ...HOUSE_SPRING, restDelta: 0.0005, restSpeed: 0.005 } as const
+const OPEN_SPRING_PX = { ...HOUSE_SPRING, restDelta: 0.1, restSpeed: 1 } as const
+const OPEN_TRANSITION = { x: OPEN_SPRING_PX, y: OPEN_SPRING_PX, scaleX: OPEN_SPRING_SCALE, scaleY: OPEN_SPRING_SCALE } as const
+const NAV_SPRING = HOUSE_SPRING       // left / right between assets
+const NAV_SPRING_REDUCED = SPRING_REDUCED
+// Shift-click / shift-arrow debug: the same character stretched to ~3s so every phase of the
+// entrance (clone flight, page fade, scrim fade) can be inspected frame by frame.
+const SLOW_OPEN_SPRING = SPRING_SLOW
+const SLOW_NAV_SPRING = SPRING_SLOW
+const CLOSE_DRAG = 100 // swipe the image down past this (px) to dismiss
+/* The veil (the in-document layer the iOS bottom bar blurs — see the backdrop effect) never
+ * goes below THIS opacity while mounted: at exactly 0 an element paints nothing and Safari
+ * tears its layers down, and rebuilding is the lazy path that popped instead of fading. */
+const VEIL_MIN_OPACITY = 0.002
+
+// Contain-fit a photo of intrinsic (w×h) inside a container rect → the image's actual on-screen
+// rectangle. The flying-clone open flies to THIS rect (not the container's), so start and end
+// share the photo's aspect ratio and the clone scales uniformly — a pure GPU transform, no
+// distortion (which independent width/height or scaleX≠scaleY would cause).
+function containRect(
+  c: { left: number; top: number; width: number; height: number },
+  w: number,
+  h: number,
+) {
+  if (!w || !h) return { left: c.left, top: c.top, width: c.width, height: c.height }
+  const ar = w / h
+  let iw = c.width
+  let ih = c.width / ar
+  if (ih > c.height) { ih = c.height; iw = c.height * ar }
+  return { left: c.left + (c.width - iw) / 2, top: c.top + (c.height - ih) / 2, width: iw, height: ih }
+}
+
+function IconClose() {
+  return <X aria-hidden="true" size={24} />
+}
+
+function IconArrow({ dir }: { dir: 'left' | 'right' }) {
+  return dir === 'left'
+    ? <ChevronLeft aria-hidden="true" size={28} />
+    : <ChevronRight aria-hidden="true" size={28} />
+}
+
+interface LightboxProps {
+  photo: UnsplashPhoto
+  index: number
+  total: number
+  onClose: () => void
+  onPrev: () => void
+  onNext: () => void
+  originRect: DOMRect | null
+  direction: number
+  prevPhoto: UnsplashPhoto | null
+  nextPhoto: UnsplashPhoto | null
+  /** Reserve space for a caption/exif line under the image. Off for article images,
+   *  which carry no caption — the image then gets the freed vertical space. */
+  hasCaptions?: boolean
+  /** The 1px edge outline on the photo. On for /photos (it matches the grid's treatment and
+   *  keeps near-white / near-black photographs from merging into the scrim). OFF for article
+   *  assets — screenshots and diagrams are not photographs, and the outline reads as a stray
+   *  border flashing in and out as the overlay opens. */
+  showOutline?: boolean
+  /** Shift-click open: stretch the whole entrance to ~3s for frame-by-frame inspection. */
+  slowMo?: boolean
+  /** Show a "Permalink" link to the photo's own page (/photos/[id]) in the caption rail.
+   *  On for /photos, whose photos all have permalink pages; off for article assets, which
+   *  don't. */
+  showPermalink?: boolean
+  /** Fired ONCE, when the fly-in clone paints its first real frame (image decoded / first
+   *  video frame). The openers hide the clicked origin element on this signal rather than at
+   *  click, so the asset never blinks out before its flying copy is visibly on screen. */
+  onFlightPainted?: () => void
+  /** Fired ONCE, when the open has fully settled (the flying clone has been dropped and the
+   *  modal owns the screen). The openers RESTORE the hidden origin element on this signal —
+   *  the modal covers it completely, and having it back means a later swipe-down reveals the
+   *  asset you tapped instead of a blank hole in the page. */
+  onSettled?: () => void
+}
+
+/** Loading shimmer sized to the asset's contained (letterboxed) rect rather than the whole
+ *  slide — so while a wide clip or tall photo loads, the placeholder matches the shape that
+ *  will appear, not the entire modal. Falls back to filling the slide if the aspect is
+ *  unknown (e.g. an article raster whose dimensions weren't captured). */
+// Measures a photo's object-contain rect (w x h fitted inside the host box), tracking resize.
+// Shared by the loading shimmer and the persistent edge outline so both hug the photo exactly.
+function useContainRect(w?: number, h?: number) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null)
+  useLayoutEffect(() => {
+    const host = ref.current
+    if (!host || !w || !h) { setBox(null); return }
+    const measure = () => {
+      const cw = host.clientWidth, ch = host.clientHeight
+      if (!cw || !ch) return
+      const a = w / h
+      let dw = cw, dh = cw / a
+      if (dh > ch) { dh = ch; dw = ch * a }
+      setBox({ w: Math.round(dw), h: Math.round(dh) })
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(host)
+    return () => ro.disconnect()
+  }, [w, h])
+  return { ref, box }
+}
+
+function AssetShimmer({ w, h, radius }: { w?: number; h?: number; radius?: string }) {
+  const { ref, box } = useContainRect(w, h)
+  return (
+    <div ref={ref} aria-hidden className="absolute inset-0 z-0 flex items-center justify-center">
+      <div
+        className="shimmer relative"
+        style={box
+          ? { width: box.w, height: box.h, borderRadius: radius }
+          : { position: 'absolute', inset: 0 }}
+      />
+    </div>
+  )
+}
+
+// Persistent neutral edge outline hugging the photo's contained rect — the same 1px treatment as
+// the /photos grid (.img-outline), so near-white / near-black photos don't merge with the scrim.
+// Sits above both image layers (z-30) so its inward outline paints over the photo's edge; photos
+// only, as videos keep their own progress-bar treatment.
+function AssetOutline({ w, h, radius }: { w?: number; h?: number; radius?: string }) {
+  const { ref, box } = useContainRect(w, h)
+  return (
+    <div ref={ref} aria-hidden className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center">
+      {box && <div className="img-outline" style={{ width: box.w, height: box.h, borderRadius: radius }} />}
+    </div>
+  )
+}
+
+/** A clip playing inside the lightbox: shimmer while it loads, then a 2px red progress bar
+ *  matched to the video's contained (letterboxed) rect — same treatment as in-article. Only
+ *  the current slide autoplays; on nav the slide remounts (keyed by id) so it reliably plays,
+ *  and the src is resolved even for clips that never scrolled into view (see AssetLightbox). */
+function LightboxVideo({ photo, priority, onLoad, armed = true, getCloneTime }: {
+  photo: UnsplashPhoto
+  priority?: boolean
+  onLoad?: () => void
+  armed?: boolean
+  /** The playhead of the frame the flying clone is CURRENTLY showing — its live video's time
+   *  when that has painted, else the frozen poster's captured time. The reveal syncs to this,
+   *  because this clip plays behind the veil while it loads and drifts away from the clone. */
+  getCloneTime?: () => number | null
+}) {
+  const ref = useRef<HTMLVideoElement>(null)
+  // Reduced-motion users get the synced frame, not autoplay — native controls (below) start
+  // playback on their terms, same policy as AutoplayVideo in-article.
+  const reduceMotion = useReducedMotion()
+  // The REVEAL must not run until the fly-in has landed — otherwise the modal clip would appear
+  // over the top of the clone that is still flying. This clip is already playing by then (in sync
+  // with the clone); it is simply invisible, behind the transparent container. Deferred here and
+  // re-fired the moment `armed` flips.
+  const armedRef = useRef(armed)
+  const pendingRef = useRef(false)
+  const revealRef = useRef<(() => void) | null>(null)
+  useEffect(() => {
+    armedRef.current = armed
+    if (armed && pendingRef.current) { pendingRef.current = false; revealRef.current?.() }
+  }, [armed])
+  const onLoadRef = useRef(onLoad)
+  useEffect(() => { onLoadRef.current = onLoad })
+  const getCloneTimeRef = useRef(getCloneTime)
+  useEffect(() => { getCloneTimeRef.current = getCloneTime })
+  const [progress, setProgress] = useState(0)
+  const [ready, setReady] = useState(false)
+  const [bar, setBar] = useState<{ w: number; left: number; top: number } | null>(null)
+  // The clip's own dimensions size the loading shimmer to its contained rect. Seeded from the
+  // gathered photo (set once the in-article clip has metadata), then corrected from the modal
+  // video's own loadedmetadata — so a clip that hadn't loaded when clicked still gets a
+  // clip-shaped shimmer rather than one filling the whole slide.
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(
+    photo.width > 0 && photo.height > 0 ? { w: photo.width, h: photo.height } : null,
+  )
+  const showBar = !!photo.videoProgress // only mirror the bar if the clip has one in-article
+
+  useEffect(() => {
+    const v = ref.current
+    if (!v) return
+    const onTime = () => { const d = v.duration; if (d && Number.isFinite(d)) setProgress(v.currentTime / d) }
+    // Match the bar to the video's contained rect. The clip is laid out in the top of the
+    // slide, leaving a 10px strip below (8px gap + 2px bar) so the bar never overlaps it.
+    const measure = () => {
+      const host = v.parentElement
+      if (!host) return
+      if (v.videoWidth && v.videoHeight) setDims({ w: v.videoWidth, h: v.videoHeight })
+      const cw = host.clientWidth, ch = host.clientHeight
+      const availH = ch - (showBar ? 10 : 0)
+      const a = (v.videoWidth || 16) / (v.videoHeight || 9)
+      let dw = cw, dh = cw / a
+      if (dh > availH) { dh = availH; dw = availH * a }
+      setBar({ w: dw, left: (cw - dw) / 2, top: (availH - dh) / 2 + dh + 8 })
+    }
+    // THIS CLIP RUNS IN SYNC WITH THE FLYING CLONE, from the moment it has metadata.
+    //
+    // It used to sit paused through the whole flight and only seek to the clone's live position at
+    // the handoff — and to keep the clone from drifting past the frame being handed over, the clone
+    // was PAUSED while that seek ran. Measured in Safari, that froze the picture for 175ms: the
+    // playhead sat at 2.915 from t=545 to t=720 while the seek, the painted-frame wait, the React
+    // commit and the clone's two-frame overlap all stacked up. That is the "video pauses for a
+    // split second after the animation completes".
+    //
+    // The stall existed only because the two clips were at different times and had to be
+    // reconciled. So don't let them diverge: both start from the same captured frame
+    // (photo.videoTime) and both play at 1x from there, so they stay together on their own. The
+    // handoff is then a pure swap of two videos already showing the same thing — no seek, no pause,
+    // nothing to reconcile, and the clip never stops moving.
+    let started = false
+    let revealed = false
+    // COLD-CACHE GUARD: the reveal may not run until the seek to the clicked frame has LANDED.
+    //
+    // Setting currentTime updates the property immediately but seeks asynchronously — and on a
+    // cold cache a seek deep into the file has to fetch and decode a distant byte range, which
+    // takes long enough that requestVideoFrameCallback fires first with frame 0 still on screen.
+    // The reveal then dropped the clone (showing the correct clicked frame) over a modal video
+    // showing the START of the clip: the picture jumped backwards at the end of the fly-in, then
+    // jumped again when the seek landed. Warm caches seek instantly, which is why it only ever
+    // showed cold. FlightVideo has always gated on the landed seek; this is the same gate.
+    let seekTarget = priority && photo.videoTime ? photo.videoTime : 0
+    let seekLanded = seekTarget <= 0
+    let seekFailsafe: number | undefined
+    let resyncs = 0
+    const startPlayback = () => {
+      if (started) return
+      started = true
+      // Match the clone's starting frame. Only the clicked clip (priority) does this; neighbours
+      // rest at frame 0 until they are swiped to.
+      if (priority && photo.videoTime && v.currentTime < 0.05) {
+        try {
+          v.currentTime = photo.videoTime
+          // If `seeked` somehow never fires (a stream that can't land it), reveal anyway after
+          // 4s — the clone (the clip itself, playing) covers the whole wait, so the failsafe
+          // only trades a permanently-hidden modal video for a worst-case late swap.
+          seekFailsafe = window.setTimeout(() => { seekLanded = true; maybeReveal() }, 4000)
+        } catch {
+          seekLanded = true // not seekable yet — plays from 0; nothing better to wait for
+        }
+      } else {
+        seekLanded = true // no seek needed: the current frame is already the right frame
+      }
+      if (priority && !reduceMotion) v.play().catch(() => {})
+    }
+    let done = false
+    const reveal = () => {
+      if (done) return
+      done = true
+      // Seed the bar with the position the clip is ACTUALLY at, in the same commit it first mounts.
+      // It used to mount at 0 and only get a real value on the first `timeupdate`, and because the
+      // fill carries a width transition, that value then animated in from the left edge: the bar
+      // appeared empty and visibly chased the playhead. A freshly-inserted element does not
+      // transition its initial value, so setting it here means the bar's first paint is already in
+      // the right place; later timeupdates still glide.
+      const d = v.duration
+      if (d && Number.isFinite(d)) setProgress(v.currentTime / d)
+      setReady(true)
+      onLoadRef.current?.()
+    }
+    // Reveal on a PAINTED frame, never on an event.
+    //
+    // An event says the decoder is done, not that the frame is on screen — WebKit paints it on the
+    // next compositor tick. Measured in Safari: `seeked` at 592ms, the frame painted at 604ms.
+    // Handing the stage over inside that 12ms window (clone unmounted, modal video not yet showing
+    // anything) was the flash at the END of the open animation, exactly as painting frame 0 before
+    // the seek landed was the flash at the START (see FlightVideo). requestVideoFrameCallback fires
+    // only once a frame has actually been presented, so gating on it makes the swap frame-exact.
+    // The clip is playing by now, so frames keep coming and this always fires.
+    const revealOnPaintedFrame = () => {
+      if (revealed) return
+      revealed = true
+      const rvfc = (v as RVFCVideo).requestVideoFrameCallback
+      if (!rvfc) { reveal(); return } // no rVFC: this is the best signal available
+      const to = window.setTimeout(reveal, 120) // safety net if playback never starts
+      rvfc.call(v, () => { window.clearTimeout(to); reveal() })
+    }
+    // The single reveal funnel: seek landed AND flight landed (armed) AND in step with the
+    // clone, else park in pending. `revealRef` points HERE (not at revealOnPaintedFrame), so
+    // the armed-flip re-fire runs the same gates — it used to jump straight to the paint wait,
+    // which skipped the sync check below.
+    const maybeReveal = () => {
+      if (revealed || !seekLanded) return
+      // The flight has not landed yet: keep this clip playing BEHIND the clone (the container is
+      // still transparent) and reveal the moment `armed` flips.
+      if (!armedRef.current) { pendingRef.current = true; return }
+      // FINAL SYNC. "Both start from the clicked frame and play at 1x, so they stay together"
+      // is only true when both START at the same wall-clock moment. On a slow load this clip
+      // begins playing whenever its data arrives — behind the veil — while the clone has been
+      // showing the clicked frame (frozen poster) or its own live playback the whole time. By
+      // reveal time the two could be seconds apart, and the swap jumped: THE flash at the end
+      // of the open that survived the seek gate. So immediately before revealing, compare
+      // against the frame the clone is actually showing and land there first. Each pass loops
+      // back through `seeked` → here; three attempts is plenty (warm seeks converge in one).
+      const cloneT = priority ? getCloneTimeRef.current?.() : null
+      if (cloneT != null && Math.abs(v.currentTime - cloneT) > 0.15 && resyncs < 3) {
+        resyncs++
+        seekLanded = false
+        seekTarget = Math.max(0, Math.min(cloneT + 0.05, (Number.isFinite(v.duration) ? v.duration : Infinity) - 0.05))
+        try { v.currentTime = seekTarget } catch { seekLanded = true }
+        return
+      }
+      revealOnPaintedFrame()
+    }
+    revealRef.current = maybeReveal
+    const onSeeked = () => {
+      if (Math.abs(v.currentTime - seekTarget) > 0.25) return // an intermediate seek — keep waiting
+      window.clearTimeout(seekFailsafe)
+      seekLanded = true
+      maybeReveal()
+    }
+    const onReady = () => {
+      measure()
+      startPlayback() // in sync with the clone, from the first moment it can be
+      maybeReveal()
+    }
+    v.addEventListener('seeked', onSeeked)
+    v.addEventListener('timeupdate', onTime)
+    v.addEventListener('loadeddata', onReady)
+    v.addEventListener('canplay', onReady)
+    v.addEventListener('playing', onReady)
+    v.addEventListener('loadedmetadata', measure)
+    // Reveal precisely on the first painted frame where supported, so the clone→video swap is
+    // frame-exact (no flash).
+    type RVFCVideo = HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number }
+    const rvfc = (v as RVFCVideo).requestVideoFrameCallback
+    if (rvfc) rvfc.call(v, () => onReady())
+    if (v.readyState >= 2) onReady() // frame 0 already decoded (e.g. bfcache)
+    if (v.videoWidth) measure()
+    const ro = new ResizeObserver(measure)
+    if (v.parentElement) ro.observe(v.parentElement)
+    return () => {
+      window.clearTimeout(seekFailsafe)
+      v.removeEventListener('seeked', onSeeked)
+      v.removeEventListener('timeupdate', onTime)
+      v.removeEventListener('loadeddata', onReady)
+      v.removeEventListener('canplay', onReady)
+      v.removeEventListener('playing', onReady)
+      v.removeEventListener('loadedmetadata', measure)
+      ro.disconnect()
+    }
+    // videoSrc/videoTime (not photo.id): the dk-media-viewer extraction keys on these, and it's
+    // the safer list — a reused id with a new capture time would otherwise seek a stale target.
+  }, [priority, photo.videoSrc, photo.videoTime, showBar, reduceMotion])
+
+  return (
+    <>
+      {!ready && <AssetShimmer w={dims?.w} h={dims?.h} radius={photo.frameRadius} />}
+      <video
+        ref={ref}
+        src={photo.videoSrc}
+        muted
+        loop
+        playsInline
+        // Reduced motion: the clip stays paused on its synced frame, so the native controls are
+        // the play affordance (the lightbox has no other one). Their taps must not bubble to
+        // the root's tap-to-close.
+        controls={!!reduceMotion}
+        onClick={reduceMotion ? (e) => e.stopPropagation() : undefined}
+        preload={priority ? 'auto' : 'metadata'}
+        // No poster: the reveal waits for the clip to paint, so it shows frame 0 directly with
+        // no poster→video swap. A <video> is a replaced element, so left/right insets don't
+        // stretch it — size it explicitly, leaving a 10px strip for the bar when shown.
+        style={{ height: showBar ? 'calc(100% - 10px)' : '100%' }}
+        className="absolute inset-x-0 top-0 z-10 w-full object-contain"
+      />
+      {/* Gated on `ready` — i.e. it mounts with the clip's real position already seeded (see
+          reveal()) — and eased in, so it resolves with the clip instead of snapping into existence
+          under it the instant the geometry is measured. */}
+      {showBar && bar && ready && (
+        <m.div
+          aria-hidden
+          className="absolute z-20 h-0.5 overflow-hidden"
+          style={{ width: bar.w, left: bar.left, top: bar.top, background: 'color-mix(in srgb, currentColor 22%, transparent)' }}
+          // Half a second, accelerating (easeIn), and it only starts once the fly-in has landed —
+          // the bar does not mount until the clip reveals, which is gated on the open animation
+          // finishing. So it emerges quietly under the settled clip rather than competing with it.
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.5, ease: 'easeIn' }}
+        >
+          <div className="h-full w-full origin-left" style={{ transform: `scaleX(${progress})`, background: 'var(--color-accent)', transition: 'transform 0.25s linear' }} />
+        </m.div>
+      )}
+    </>
+  )
+}
+
+/** One image in the swipe track, offset by translateX so prev/current/next sit side by
+ *  side. The base layer reuses the grid's already-loaded `urls.regular` file (instant,
+ *  from cache); a sharper optimized variant fades in on top once loaded — for every
+ *  visible slide, so a swipe/nav always lands on a hi-res image. */
+function Slide({ photo, offset, priority, hiRes = true, onLoad, showOutline = true, armed = true, getCloneTime }: {
+  photo: UnsplashPhoto
+  offset: string
+  priority?: boolean
+  /** Load the sharp layer. Off for neighbours during the open animation so five big images
+   *  don't decode at once and jitter the spring — they upgrade once the overlay has opened. */
+  hiRes?: boolean
+  onLoad?: () => void
+  /** The 1px edge outline. It exists so near-white / near-black PHOTOS don't merge into the
+   *  scrim on /photos, where it also matches the grid's treatment. Article assets are not
+   *  photographs and never had it, so it reads as a stray border flashing in and out on them. */
+  showOutline?: boolean
+  /** Has the fly-in landed? The clip plays behind the flying clone either way; this only gates
+   *  the REVEAL, so the modal clip cannot appear on top of a clone still in the air. */
+  armed?: boolean
+  /** See LightboxVideo — the clone's currently-visible playhead, for the reveal-time sync. */
+  getCloneTime?: () => number | null
+}) {
+  const [hiResLoaded, setHiResLoaded] = useState(false)
+  const [baseLoaded, setBaseLoaded] = useState(false)
+
+  // Article video clips play in place of the image layers (shimmer + progress bar live in
+  // LightboxVideo). Only the current slide (priority) autoplays; neighbours rest until
+  // swiped to, so opening the overlay never decodes three clips at once.
+  if (photo.videoSrc) {
+    return (
+      <div className="absolute inset-0" style={{ transform: `translateX(${offset})` }}>
+        {/* The slide spans the full track width so it can travel fully off-screen; the asset is
+            inset 16px so it never bleeds to the very edge at rest (the margins live here, not on
+            the clipped container, so they don't cut the slide short). */}
+        <div className="absolute inset-y-0 inset-x-4">
+          <LightboxVideo photo={photo} priority={priority} onLoad={onLoad} armed={armed} getCloneTime={getCloneTime} />
+        </div>
+      </div>
+    )
+  }
+
+  // Build the hi-res URL: bump to 2048px width and request auto=format (avif/webp where
+  // supported — 64% smaller than fm=jpg on a cold cache, curl-verified 2026-07-08).
+  // Local/manual photos (urls.regular starts with '/') are unaffected by both replaces.
+  const hiResUrl = photo.urls.regular.replace(/([&?])w=\d+/, '$1w=2048').replace('fm=jpg', 'auto=format')
+  const loading = priority ? undefined : 'eager'
+  return (
+    <div className="absolute inset-0" style={{ transform: `translateX(${offset})` }}>
+      {/* Full-width slide (travels fully off-screen), asset inset 16px so it keeps its margins at
+          rest without the container's clip cutting the slide short mid-animation. */}
+      <div className="absolute inset-y-0 inset-x-4">
+        {!baseLoaded && <AssetShimmer w={photo.width} h={photo.height} radius={photo.frameRadius} />}
+        {/* The base layer prefers flightSrc — the exact file the origin <img> had already
+            decoded, served verbatim — so the track is painted before the fly-in lands even on
+            a cold cache. Fetching a fresh optimizer URL here was the cold-start "modal first,
+            image a second later" failure for article assets. */}
+        <Image
+          // auto=format on the remote fallback (neighbor slides, no flightSrc): the grid
+          // now loads the avif/webp family via its responsive loader, so a fm=jpg base
+          // here would re-download 1080w JPEGs the cache no longer has. Same URL family
+          // = desktop nav is a cache hit again; local '/' URLs contain no fm=jpg (no-op).
+          src={photo.flightSrc || photo.urls.regular.replace('fm=jpg', 'auto=format')}
+          alt={photo.alt_description ?? photo.description ?? ''}
+          fill
+          sizes="100vw"
+          className="object-contain z-10"
+          priority={priority}
+          loading={loading}
+          unoptimized={!!photo.flightSrc || !photo.urls.regular.startsWith('/')}
+          draggable={false}
+          onLoad={() => { setBaseLoaded(true); onLoad?.() }}
+        />
+        {hiRes && (
+          <Image
+            src={hiResUrl}
+            alt=""
+            aria-hidden
+            fill
+            sizes="100vw"
+            className="object-contain z-20"
+            priority={priority}
+            loading={loading}
+            unoptimized={!hiResUrl.startsWith('/')}
+            draggable={false}
+            // decode() before revealing: onLoad means the BYTES arrived, not that the 2048px
+            // bitmap is decoded and ready to composite. Flipping opacity on load made the
+            // browser decode + rasterize the full-size image inside the fade's first frames —
+            // the little hitch visible on slow connections as the sharp layer swapped in.
+            // decode() runs off the main thread and resolves with the bitmap ready, so the
+            // fade is then a pure composited opacity ramp. Falls back to revealing anyway if
+            // decode() is unsupported or rejects.
+            onLoad={(e) => {
+              const img = e.currentTarget
+              const decoded: Promise<void> = img.decode ? img.decode().catch(() => {}) : Promise.resolve()
+              decoded.then(() => setHiResLoaded(true))
+            }}
+            style={{ opacity: hiResLoaded ? 1 : 0, transition: 'opacity 300ms ease-out' }}
+          />
+        )}
+        {showOutline && <AssetOutline w={photo.width} h={photo.height} radius={photo.frameRadius} />}
+      </div>
+    </div>
+  )
+}
+
+/** The still frame under a flying video clone. It is what guarantees the clone always has
+ *  something painted: `flightPoster` (a canvas snapshot of the exact clicked frame) when the clip
+ *  had decoded a frame, else the clip's own poster jpg, which always exists. The live <video>
+ *  layers on top and covers this as soon as it has a real frame. Without it, the clone is
+ *  transparent while the video seeks — a hole showing the scrim through it. */
+function FlightStill({ photo, onPainted, hidden = false, repaintRef }: {
+  photo: UnsplashPhoto
+  onPainted: () => void
+  hidden?: boolean
+  /** Parent-held hook: repaint this still from the live clone <video>, so it can come BACK at
+   *  the handoff showing the current frame instead of the stale click frame (see below). */
+  repaintRef?: { current: ((v: HTMLVideoElement) => void) | null }
+}) {
+  // A CANVAS rather than an <img>, so its pixels can be refreshed. The still starts as the
+  // click-frame snapshot (flightPoster) and its only job used to end the moment the live video
+  // painted — it went to opacity 0 and stayed there, because Safari transiently drops video
+  // layers while re-compositing and this STALE frame showing through read as the picture
+  // jumping backwards. But hiding it opened a worse hole: at the handoff re-composite (modal
+  // container promoted, clone eventually dropped) a transiently-dropped video layer now had
+  // NOTHING beneath it but the scrim — the intermittent WHITE flash at the end of the open.
+  // The parent now repaints this canvas from the clone's live frame right before the handoff
+  // and un-hides it, so every re-composite window has current pixels underneath.
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const src = photo.flightPoster || photo.urls.regular
+  const onPaintedRef = useRef(onPainted)
+  useEffect(() => { onPaintedRef.current = onPainted })
+  useEffect(() => {
+    if (!src) return
+    const img = new window.Image()
+    img.onload = () => {
+      const c = canvasRef.current
+      if (!c) return
+      c.width = img.naturalWidth
+      c.height = img.naturalHeight
+      c.getContext('2d')?.drawImage(img, 0, 0)
+      onPaintedRef.current()
+    }
+    img.src = src
+  }, [src])
+  useEffect(() => {
+    if (!repaintRef) return
+    repaintRef.current = (v: HTMLVideoElement) => {
+      const c = canvasRef.current
+      if (!c || !v.videoWidth) return
+      if (c.width !== v.videoWidth) { c.width = v.videoWidth; c.height = v.videoHeight }
+      try { c.getContext('2d')?.drawImage(v, 0, 0) } catch { /* cross-origin frame — keep poster */ }
+    }
+    return () => { repaintRef.current = null }
+  }, [repaintRef])
+  if (!src) return null
+  return (
+    <canvas
+      ref={canvasRef}
+      aria-hidden
+      className="absolute inset-0 h-full w-full object-contain"
+      style={{ opacity: hidden ? 0 : 1 }}
+    />
+  )
+}
+
+/** The live <video> inside the fly-in clone — held INVISIBLE until it has painted the frame that
+ *  was actually clicked.
+ *
+ *  A fresh <video> does not wait to be seeked before it starts painting. Measured on the Dot post:
+ *  the clone paints frame 0 at ~45ms, and its seek to the clicked timestamp (8.53s) only lands at
+ *  ~106ms. For those ~60ms the flying clone showed the START of the clip at full opacity, on top of
+ *  the correct still, and then cut back. That is the "flash immediately after I click", and it is
+ *  content, not animation — which is why it survived every change to the spring and why slow-mo
+ *  didn't slow it down.
+ *
+ *  It only ever showed on the long landscape clip. The bezel clips are short loops, so their frame
+ *  0 is near enough to the clicked frame that the wrong-frame window is invisible.
+ *
+ *  FlightStill (the exact clicked frame) is already underneath, so hiding the video until it lands
+ *  costs nothing: the swap is then pixel-identical and imperceptible. */
+function FlightVideo({ photo, videoRef, onShown }: { photo: UnsplashPhoto; videoRef: { current: HTMLVideoElement | null }; onShown?: () => void }) {
+  const ref = useRef<HTMLVideoElement>(null)
+  // Reduced motion: the clone stays paused on the clicked frame — identical pixels to the still
+  // beneath it. The modal clip (LightboxVideo) carries the play affordance.
+  const reduceMotion = useReducedMotion()
+  const [shown, setShown] = useState(false)
+  const onShownRef = useRef(onShown)
+  useEffect(() => { onShownRef.current = onShown })
+  useEffect(() => { if (shown) onShownRef.current?.() }, [shown])
+
+  useEffect(() => {
+    const v = ref.current
+    if (!v) return
+    videoRef.current = v
+    type RVFCVideo = HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number }
+    const rvfc = (v as RVFCVideo).requestVideoFrameCallback?.bind(v)
+    const target = photo.videoTime ?? 0
+    // Clicked at the very start (or a clip with no captured time): frame 0 IS the right frame.
+    let landed = target <= 0
+    const onPaint = () => { if (landed) setShown(true); else rvfc?.(onPaint) }
+    const onSeeked = () => {
+      if (Math.abs(v.currentTime - target) > 0.25) return // an intermediate seek — keep waiting
+      landed = true
+      if (rvfc) rvfc(onPaint) // reveal on the first frame PAINTED after the seek, not on the event
+      else setShown(true) // no rVFC: `seeked` is the best signal available
+    }
+    v.addEventListener('seeked', onSeeked)
+    if (rvfc) rvfc(onPaint)
+    else if (landed) setShown(true)
+    return () => {
+      v.removeEventListener('seeked', onSeeked)
+      if (videoRef.current === v) videoRef.current = null
+    }
+  }, [photo.videoTime, videoRef])
+
+  return (
+    <video
+      ref={ref}
+      src={photo.videoSrc}
+      muted
+      playsInline
+      loop
+      preload="auto"
+      onLoadedMetadata={(e) => {
+        const v = e.currentTarget
+        if (photo.videoTime) v.currentTime = photo.videoTime
+        if (!reduceMotion) v.play().catch(() => {})
+      }}
+      // No transition: this is a cut between identical pixels (the still and the clip's own frame),
+      // so a cross-fade would only make it visible.
+      style={{ opacity: shown ? 1 : 0 }}
+      className="absolute inset-0 z-10 h-full w-full object-contain"
+    />
+  )
+}
+
+export function Lightbox({ photo, index, total, onClose, onPrev, onNext, originRect, prevPhoto, nextPhoto, hasCaptions = true, showOutline = true, slowMo = false, showPermalink = false, onFlightPainted, onSettled }: LightboxProps) {
+  const caption = photo.description ?? photo.alt_description ?? null
+
+  // White surface in light mode, near-black grey in dark mode; UI adapts to match.
+  const { resolvedTheme } = useTheme()
+  const dark = resolvedTheme === 'dark'
+  const FG = dark ? '#ededed' : '#1a1a1a'
+  // The modal surface IS the page surface — read the token, never a hardcoded triple. The old
+  // hardcoded dark value (rgb(24,24,27)) was deliberately "slightly off" from the page, but since
+  // <html>/<body> are pinned to it INSTANTLY on open (below, for the iOS toolbar tint), that
+  // difference read as the whole page lightening the moment you clicked: the real token
+  // oklch(0.18 0.008 240) rasterizes to rgb(14,18,21), so the modal was +10,+6,+6 brighter.
+  // Matching the token makes the pin a no-op visually — no jump — and the toolbar still samples
+  // the correct color. (Light mode was already identical, which is why the jump only showed in dark.)
+  const BG = 'var(--color-bg)'
+  const reduceMotion = useReducedMotion()
+  // Reduced motion collapses the thumbnail-to-modal flight to the same quick settle the nav
+  // uses — the scrim/veil fades were already guarded, this spring was the one holdout.
+  // Reduced motion is critically damped (no overshoot, so the default rest snap is
+  // sub-threshold) and slow-mo is a debug view; only the real flight needs the
+  // per-unit rest thresholds.
+  const openSpring = reduceMotion ? SPRING_REDUCED : slowMo ? SLOW_OPEN_SPRING : OPEN_TRANSITION
+
+  const rootRef = useRef<HTMLDivElement>(null)
+  const scrimRef = useRef<HTMLDivElement>(null)
+  // The fly-in clone's <video> when the asset is a clip — the modal video reads its LIVE
+  // currentTime at handoff so playback continues from wherever the flight actually ended.
+  const cloneVideoRef = useRef<HTMLVideoElement>(null)
+  // Has the clone's live <video> actually painted? Once it has, the stale still beneath it is
+  // dropped (see FlightStill) — it can only do harm from that point on.
+  const [cloneVideoShown, setCloneVideoShown] = useState(false)
+  // Ref mirror for getCloneTime, which is read from inside LightboxVideo's long-lived effect.
+  const cloneVideoShownRef = useRef(false)
+  useEffect(() => { cloneVideoShownRef.current = cloneVideoShown }, [cloneVideoShown])
+  // The playhead of the frame the CLONE is currently showing: its live video's time once that
+  // has painted, else the frozen poster's captured time. The modal clip syncs to this right
+  // before it reveals (see the FINAL SYNC note in LightboxVideo).
+  const getCloneTime = useCallback(() => {
+    const cv = cloneVideoRef.current
+    if (cv && cloneVideoShownRef.current) return cv.currentTime
+    return photo.videoTime ?? 0
+  }, [photo.videoTime])
+  // First-real-frame signal for the clone — fired once; the opener hides the origin element
+  // on it, so the origin→clone handoff is paint-to-paint with no blink.
+  const flightPaintedRef = useRef(false)
+  // Also state, because the page-fade loop below must not START until this is true: the page may
+  // not begin disappearing before the thing replacing it is on screen.
+  const [flightPainted, setFlightPainted] = useState(false)
+  const fireFlightPainted = () => {
+    if (flightPaintedRef.current) return
+    flightPaintedRef.current = true
+    setFlightPainted(true)
+    onFlightPainted?.()
+  }
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [targetRect, setTargetRect] = useState<DOMRect | null>(null)
+  const [animDone, setAnimDone] = useState(!originRect)
+  // Hold the spring for ONE painted frame before it starts.
+  //
+  // motion begins the open animation on the same frame React commits the whole modal — three
+  // slides, a <video preload="auto">, and a ~130KB data-URL poster to decode. That commit takes
+  // ~150ms, so the spring's FIRST rAF arrived with a ~150ms delta and integrated straight to 79%
+  // of the travel in a single frame: the clip appeared to snap to full size and then creep the
+  // last 20%, with a 4px overshoot correction at the end. Measured off a 60fps screen recording,
+  // that is exactly the "jitter right after I click" and the "jitter at the end".
+  //
+  // Gating on a double-rAF lets the expensive commit land, then starts the spring on a clean
+  // frame with a normal ~16ms delta, so it actually springs.
+  const [fly, setFly] = useState(false)
+  useEffect(() => {
+    if (!originRect) return
+    const id = requestAnimationFrame(() => requestAnimationFrame(() => setFly(true)))
+    return () => cancelAnimationFrame(id)
+  }, [originRect])
+  const [imageLoaded, setImageLoaded] = useState(false)
+  // Images: reveal as soon as the fly-in lands, so the shimmer covers a slow load. Videos:
+  // hold the clone — which is the clip itself, still PLAYING — until the modal video has
+  // sought to the clone's live position and is painting, so the swap lands on the same frame.
+  const containerVisible = !originRect || (animDone && (!photo.videoSrc || imageLoaded))
+  // Hold the flying clone on screen for two painted frames AFTER the modal is revealed, then drop
+  // it. The clone is the same pixels, opaque, frozen, and pointer-events-none, so the overlap is
+  // invisible — but the gap it covers is not.
+  //
+  // Measured in Safari, 60fps: at the handoff there is exactly ONE frame where the whole clip is
+  // uniformly washed out (region mean 38.8 -> 67.6 -> 38.1, which solves to the clip at ~87% over
+  // the white scrim). Nothing in the tree has an 87% opacity, and it survived making the reveal
+  // wait for a painted frame — it is Safari re-compositing the video layer as the clone unmounts
+  // and the modal video takes over, during which the new layer is briefly not fully opaque and the
+  // scrim shows through it. Chrome never does this.
+  //
+  // There is no way to make Safari promote the layer faster, so instead nothing is ever uncovered:
+  // the clone stays on top across the swap.
+  const [cloneGone, setCloneGone] = useState(false)
+  const cloneGoneRef = useRef(false)
+  const onSettledRef = useRef(onSettled)
+  useEffect(() => { onSettledRef.current = onSettled })
+  // Hide the clone (it stays MOUNTED — see the render note) and declare the open settled.
+  // Shared by the overlap timer below and commit(), which must drop the clone instantly when a
+  // nav starts sliding the track underneath it.
+  const settleClone = useCallback(() => {
+    if (cloneGoneRef.current) return
+    cloneGoneRef.current = true
+    setCloneGone(true)
+    // The clone's job is over; its video needn't keep decoding in parallel with the modal's.
+    cloneVideoRef.current?.pause()
+    // The open has fully settled: the modal owns the screen. The opener restores the hidden
+    // origin element on this signal (see LightboxProps.onSettled).
+    onSettledRef.current?.()
+  }, [])
+  // The overlap grew from two painted frames to 300ms. Two frames covered Chrome, but Safari's
+  // transient layer washout at the handoff (see below) can outlive them — and since the clone
+  // and the modal are frame-locked by reveal time (see LightboxVideo's FINAL SYNC), a longer
+  // overlap is invisible. It ends EARLY the moment a nav needs the track (commit calls
+  // settleClone), so interaction never fights it.
+  useEffect(() => {
+    if (!containerVisible || cloneGone) return
+    // 300ms ONLY for clips (the Safari video-layer washout the overlap exists for; clone and
+    // modal are frame-locked so it's invisible). Images get the original two-frames-worth:
+    // an image clone fits by the THUMBNAIL's aspect, and when that differs a hair from the
+    // slide's intrinsic-aspect letterbox, a long overlap shows two sizes stacked.
+    const id = window.setTimeout(settleClone, photo.videoSrc ? 300 : 35)
+    return () => window.clearTimeout(id)
+  }, [containerVisible, cloneGone, settleClone, photo.videoSrc])
+  // At the moment of the handoff, refresh the still UNDER the clone's video with the clone's
+  // current frame and bring it back (FlightStill was hidden once the live video painted). Every
+  // layer Safari might transiently drop during the handoff re-composite now has current pixels
+  // beneath it instead of the white scrim.
+  const stillRepaintRef = useRef<((v: HTMLVideoElement) => void) | null>(null)
+  const [stillResurfaced, setStillResurfaced] = useState(false)
+  // The still comes back the moment the container is visible (render adjustment)…
+  if (containerVisible && !stillResurfaced) setStillResurfaced(true)
+  // …with FRESH pixels: the repaint runs pre-paint (layout effect) in that same commit,
+  // so the resurfaced still never paints a stale frame.
+  const stillRepaintedRef = useRef(false)
+  useLayoutEffect(() => {
+    if (!containerVisible || stillRepaintedRef.current) return
+    const cv = cloneVideoRef.current
+    if (cv) stillRepaintRef.current?.(cv)
+    stillRepaintedRef.current = true
+  }, [containerVisible])
+  // Where the flying-clone open lands: the photo's contain-fitted rect inside the container.
+  // Aspect comes from the thumbnail's rect (originRect) — always known, whereas article images
+  // (via ImgModal) carry width/height 0, which would make the fit NaN and the photo never reveal.
+  // Reserve the same 10px strip a progress-bar clip leaves at the bottom, so the clone lands
+  // exactly where the video ends up (no resize when the bar appears).
+  const barReserve = photo.videoSrc && photo.videoProgress ? 10 : 0
+  // Each slide insets its asset 16px per side (inset-x-4 in Slide), so the flight must land
+  // inside that same box. Fitting to the full container let a width-bound asset (a landscape
+  // photo or clip on a phone) fly to full-bleed and then snap to its real, inset width the
+  // moment the track revealed.
+  const SLIDE_INSET = 16
+  const cloneTarget = targetRect && originRect
+    ? containRect(
+        {
+          left: targetRect.left + SLIDE_INSET,
+          top: targetRect.top,
+          width: targetRect.width - SLIDE_INSET * 2,
+          height: targetRect.height - barReserve,
+        },
+        originRect.width,
+        originRect.height,
+      )
+    : null
+
+  // Caption material lives in globals.css as .lightbox-caption-card: dark glass on
+  // desktop (photo fills the height, card sits ON it; fade the card's OWN opacity only,
+  // never a wrapper's — see the recipe's backdrop-root note), plain theme ink on mobile
+  // (card sits on the backdrop below the photo). Text reads --cap-fg / --cap-muted,
+  // which the recipe flips with the material.
+
+  // Caption/exif follow the committed photo but update in step with the slide (not at
+  // its end), so they don't appear to lag the image. Re-synced to `photo` on prop change.
+  const [captionPhoto, setCaptionPhoto] = useState(photo)
+  // Adjust during render, not in an effect: the caption flips in the SAME commit as the
+  // slide, never a paint behind it.
+  if (captionPhoto !== photo) setCaptionPhoto(photo)
+
+  // Desktop off-photo detection: the glass material exists for text ON the photo. When
+  // the contain-fitted photo doesn't reach the card (short landscape photo, tall window),
+  // the card drops to theme ink — the same treatment mobile always uses. Geometry is
+  // computed (contain fit vs the card's text top) rather than measured off the img, so
+  // it works mid-flight, after nav, and independent of image load state.
+  const [capOnPhoto, setCapOnPhoto] = useState(false)
+  // Same verdict, extended to the chrome buttons (2026-08-26: ink buttons got
+  // lost on dark photos). Each control earns glass on ITS OWN axes: the arrows when the
+  // photo is wide enough to run under them, the close when the photo is tall enough to
+  // reach the top-right corner.
+  const [chromeOnPhoto, setChromeOnPhoto] = useState({ close: false, prev: false, next: false })
+  const capCardRef = useRef<HTMLDivElement | null>(null)
+  const prevBtnRef = useRef<HTMLButtonElement | null>(null)
+  const nextBtnRef = useRef<HTMLButtonElement | null>(null)
+  const measureCapRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    const measure = () => {
+      // Contain-fit math from LIVE rects — never the img's own rect: the slide <Image>
+      // is fill + object-contain, so its element box is the full-height asset area and
+      // its bottom sits at the viewport bottom no matter how short the photo renders
+      // (that rect was the false-glass bug). The container rect already carries every
+      // inset the layout owns (top bar, mobile dock reserve); the only constant left
+      // is the slide's structural 16px side margins (Slide's inset-x-4).
+      const box = containerRef.current?.getBoundingClientRect()
+      const dock = dockRef.current
+      const root = rootRef.current
+      const wrap = capCardRef.current?.parentElement?.getBoundingClientRect()
+      if (!box || !wrap || !dock || !root || box.height === 0) return false
+      // A photo with no usable dimensions can't be fitted — everything reads as ink
+      // (ported from dk-lightbox's guard, 2026-08-28 drift audit; NaN aspect otherwise).
+      if (!captionPhoto.width || !captionPhoto.height) {
+        setCapOnPhoto(false)
+        setChromeOnPhoto({ close: false, prev: false, next: false })
+        return true
+      }
+      const assetW = Math.max(0, box.width - 32)
+      // captionPhoto's aspect: it flips in the SAME commit as the slide (the render
+      // adjustment above), so the material verdict always matches the photo the card
+      // is captioning, even mid-travel. (Historic note: this once guarded against a
+      // router-driven photo prop landing ~1s late; nav is plain state now.)
+      const dispH = Math.min(box.height, assetW * (captionPhoto.height / captionPhoto.width))
+      const photoBottom = box.top + (box.height + dispH) / 2
+      // Compare against the card's RESTING position, not where it currently is: during
+      // the dock's entrance the card is still below the fold, and measuring it there
+      // said "off photo" until the animation ended — the glass popped in at landing.
+      // The rest is knowable from frame one: the dock parks at the root's bottom edge
+      // (offsetHeight ignores the entrance transform), and the wrapper's offset inside
+      // the dock is transform-invariant. So the card wears the right material for the
+      // whole ride up.
+      const dockRect = dock.getBoundingClientRect()
+      const wrapRestTop = root.getBoundingClientRect().bottom - dock.offsetHeight + (wrap.top - dockRect.top)
+      // Glass only when the photo reaches the card's TEXT (~10px padding in), not
+      // merely the dock's top edge. Ties go to ink — glass is the exception that
+      // needs to earn itself, so the default state is ink too.
+      setCapOnPhoto(photoBottom > wrapRestTop + 10)
+
+      // Chrome buttons, same contain-fit geometry on their own axes. Horizontal edges
+      // from the fitted width; vertical rest positions via the same transform-invariant
+      // offset math as the card (entrance-proof). A button is "on photo" only when the
+      // photo underlaps most of its 44px circle (8px grace) — ties go to ink here too.
+      const rootRect = root.getBoundingClientRect()
+      const dispW = Math.min(assetW, box.height * (captionPhoto.width / captionPhoto.height))
+      const photoLeft = box.left + 16 + (assetW - dispW) / 2
+      const photoRight = photoLeft + dispW
+      const photoTop = box.top + (box.height - dispH) / 2
+      const gutter = parseFloat(getComputedStyle(root).getPropertyValue('--sb-gutter')) || 0
+      const restTopOf = (el: HTMLElement | null) => {
+        if (!el) return Infinity
+        return rootRect.bottom - dock.offsetHeight + (el.getBoundingClientRect().top - dockRect.top)
+      }
+      const arrowOn = (el: HTMLButtonElement | null) => {
+        if (!el) return false
+        const r = el.getBoundingClientRect()
+        const vert = photoBottom > restTopOf(el) + 8
+        // Horizontal: NEAR the photo counts as on it (16px grace) — a bare ink arrow
+        // floating a few pixels off a photo edge reads worse than glass slightly over
+        // the gutter (2026-08-27). Overrides ties-go-to-ink at the edges only.
+        return vert && photoLeft < r.right + 16 && photoRight > r.left - 16
+      }
+      setChromeOnPhoto({
+        // Close: absolute top-3, right-aligned inside the 16px + scrollbar gutter.
+        close: photoTop < rootRect.top + 12 + 44 - 8 && photoRight > rootRect.right - (16 + gutter) - 44 + 8,
+        prev: arrowOn(prevBtnRef.current),
+        next: arrowOn(nextBtnRef.current),
+      })
+      return true
+    }
+    measureCapRef.current = measure
+    // Retry every frame until the layout is measurable: on a COLD open the dock and
+    // caption card mount a beat after the dialog, so a single post-swap rAF hit the
+    // ref guard, bailed silently, and the verdict sat at its ink default until the
+    // 450ms backstop landed it — the glass (blur included) popped in a second after
+    // the fly-in settled. Slow-mo made it legible; the demo page made it felt.
+    let raf = requestAnimationFrame(function tick() {
+      let tries = 0
+      const run = () => {
+        if (measure() === false && tries++ < 60) raf = requestAnimationFrame(run)
+      }
+      run()
+    })
+    const late = window.setTimeout(measure, 450) // after the nav spring lands
+    window.addEventListener('resize', measure)
+    return () => { cancelAnimationFrame(raf); window.clearTimeout(late); window.removeEventListener('resize', measure) }
+  }, [photo, captionPhoto])
+  // Publish the dock's live height as --dock-h so the mobile media area can reserve
+  // space under the photo (see max-sm:pb below). Measured, not guessed: caption length
+  // and wrap count vary per photo. offsetHeight ignores the entrance transform.
+  // LAYOUT effect with a synchronous first apply, and declared BEFORE the targetRect
+  // measurement: the fly-in target must be measured with the padding already in place,
+  // or the clone lands in the unpadded area and the photo jumps up at handoff.
+  const dockRef = useRef<HTMLDivElement | null>(null)
+  // Has the dock's entrance finished? While false, the dock's children carry the
+  // .lightbox-dock-enter rise animation; flipping true removes the class so the keyed
+  // caption card can remount on nav without replaying the entrance.
+  // The entrance is a pure opacity fade (no translate): the rise was cut when the
+  // chrome moved to entering at the clone handoff — a hard appear read as a glitch,
+  // and a transform on the entering card is exactly what WebKit punishes hardest on
+  // backdrop-filter. (Safari still withholds the blur until any animation on the
+  // element finishes, so the glass sharpens at the fade's end there — 350ms, subtle.)
+  const [dockEntered, setDockEntered] = useState(false)
+  // Held invisible until the clone handoff (animDone) — see the .lightbox-dock-hold
+  // comment at the close button. The fade plays from the handoff, not from mount.
+  const dockRiseClass = !animDone ? 'lightbox-dock-hold ' : dockEntered ? '' : 'lightbox-dock-fade '
+  useLayoutEffect(() => {
+    const dock = dockRef.current
+    const root = rootRef.current
+    if (!dock || !root) return
+    const apply = () => root.style.setProperty('--dock-h', `${dock.offsetHeight}px`)
+    apply()
+    const ro = new ResizeObserver(apply)
+    ro.observe(dock)
+    return () => ro.disconnect()
+  }, [])
+  const capCaption = captionPhoto.description ?? null
+  const capExif = formatExif(captionPhoto.exif)
+  // Unsplash keeps "Download on Unsplash"; other synced sources get "View on <Service>".
+  const capSource = photoSourceLink(captionPhoto)
+
+  // Swipe track: `x` follows the finger horizontally (commit = navigate); `yDrag`
+  // follows a downward drag to dismiss. `axis` locks to whichever the finger leads with.
+  const x = useMotionValue(0)
+  const yDrag = useMotionValue(0)
+  // Fades to FULLY transparent by 280px: the release animation only needs to travel far
+  // enough for the content to dissolve, not escort it to the bottom of the screen.
+  const dragOpacity = useTransform(yDrag, [0, 280], [1, 0])
+
+  // GLASS FRESHNESS. WebKit takes a SAMPLE of the backdrop behind the card and can
+  // keep serving it when the only thing changing underneath is a composited transform
+  // — exactly what a slide is — so after a nav the glass kept the PREVIOUS photo's
+  // colors (Chromium re-samples fine). Every frame the track moves, nudge the card's
+  // backdrop-filter between two imperceptibly different blur radii: a filter change
+  // forces a fresh sample, so the glass is live during the slide and the settle frame
+  // (itself a change) is always fresh. Inline overrides only while the glass CSS is
+  // actually in effect (data-on-photo + the sm breakpoint) — an inline filter on the
+  // ink card would conjure phantom glass.
+  const nudgeGlassRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    let flip = 0
+    const nudge = () => {
+      const el = capCardRef.current
+      if (!el) return
+      if (!el.hasAttribute('data-on-photo') || window.innerWidth < 640) {
+        el.style.removeProperty('-webkit-backdrop-filter')
+        el.style.removeProperty('backdrop-filter')
+        return
+      }
+      flip ^= 1
+      const v = flip ? 'blur(20.02px) saturate(1.8)' : 'blur(20px) saturate(1.8)'
+      el.style.setProperty('-webkit-backdrop-filter', v)
+      el.style.setProperty('backdrop-filter', v)
+    }
+    nudgeGlassRef.current = nudge
+    return x.on('change', nudge)
+  }, [x])
+  // Backstop for change paths the track never sees: the entrance (x is idle during the
+  // open), the hi-res layer's opacity fade after a nav, a slow-mo entrance's late end.
+  // A handful of one-frame re-samples per photo costs nothing and closes the gaps.
+  useEffect(() => {
+    const ts = [450, 1200, 4200].map((ms) => window.setTimeout(() => nudgeGlassRef.current(), ms))
+    return () => ts.forEach((t) => window.clearTimeout(t))
+  }, [captionPhoto])
+
+  // SWIPE DOWN UNDOES THE OPEN, rather than just sliding the photo away.
+  //
+  // Opening the overlay fades the page content OUT and the backdrop scrim IN (see the page-fade
+  // effect). Dismissing did neither in reverse: the photo slid down and faded, but the scrim stayed
+  // fully opaque the whole way, so the page never came back — it simply appeared, all at once, when
+  // the modal unmounted. Dragging down now runs the open transition BACKWARDS in step with the
+  // finger: the scrim dissolves and the page underneath fades up, so you are literally pulling the
+  // page back into view. Let go early and it springs back, taking the reveal with it.
+  // The in-document veil the iOS bottom bar actually blurs — created by the backdrop
+  // effect below; the swipe-down reveal drives its opacity back out.
+  const veilRef = useRef<HTMLDivElement | null>(null)
+  const REVEAL_DRAG = 260 // px of downward travel that fully restores the page
+  // The open page-fade's rAF id, so a downward drag can take the opacity channel over from it
+  // (see below). Written every frame by the page-fade loop.
+  const openFadeRafRef = useRef(0)
+  useEffect(() => {
+    // NOT gated on animDone. It used to be ("the open is still running the same properties;
+    // don't fight it") — but on a phone the common gesture is tap, then swipe down immediately,
+    // BEFORE the ~350ms fly-in lands. With the subscription not yet made, the drag moved the
+    // photo while the page stayed frozen at whatever opacity the open fade had reached, then
+    // snapped visible when the modal unmounted — "it just instantly reappears". The fight is
+    // resolved the other way now: at rest (v=0) this never writes, and the moment a real drag
+    // begins it CANCELS the open fade's rAF loop and owns the opacity channel from there.
+    const scrim = scrimRef.current
+    const apply = (v: number) => {
+      if (v <= 0) return // at rest: leave the open fade alone
+      cancelAnimationFrame(openFadeRafRef.current)
+      const t = Math.min(1, Math.max(0, v / REVEAL_DRAG))
+      if (scrim) scrim.style.opacity = String(1 - t)
+      // The veil — the in-document layer the iOS bottom bar blurs — tracks the scrim exactly,
+      // so the strip behind the bar fades with the finger like the rest of the modal.
+      if (veilRef.current) veilRef.current.style.opacity = String(Math.max(VEIL_MIN_OPACITY, 1 - t))
+    }
+    return yDrag.on('change', apply)
+  }, [yDrag])
+  const trackRef = useRef<HTMLDivElement>(null)
+  const startX = useRef(0)
+  const startY = useRef(0)
+  const axis = useRef<null | 'x' | 'y'>(null)
+  // Where the gesture crossed the 8px recognition threshold. Movement is measured FROM here, so the
+  // asset never jumps to catch up with the finger — it starts under it and stays under it.
+  const lock = useRef<{ x: number; y: number } | null>(null)
+  const busy = useRef(false)
+
+  useLayoutEffect(() => {
+    const body = document.body
+    const root = rootRef.current
+    const prevOverflow = body.style.overflow
+    // Lock scroll. `html { scrollbar-gutter: stable }` is deliberately left ALONE: it keeps the ~15px
+    // gutter reserved whether or not the scrollbar shows, so nothing shifts when overflow is hidden —
+    // not the page flow, and (crucially) not the fixed header (which ignores body padding, so it can't
+    // be compensated that way). The reserved gutter would leave a strip to the right of the modal, so
+    // size the modal to the PHYSICAL viewport width: window.innerWidth spans the gutter, whereas 100vw
+    // stops short of it when a gutter is reserved. Kept in sync on resize; cleared on close.
+    body.style.overflow = 'hidden'
+    // --sb-gutter: how far innerWidth overhangs the visible layout viewport (the reserved
+    // scrollbar gutter, ~15-17px with classic scrollbars, 0 with overlay ones). The PHOTO
+    // deliberately spans it; the right-side CHROME (close, next arrow) insets by it so
+    // hover circles don't ride off the window edge. Desktop-pointer only: touch
+    // environments (and Safari responsive mode, which REPORTS a reserved gutter it never
+    // draws) have no classic scrollbar, and compensating there skews the right inset.
+    const fit = () => {
+      if (!root) return
+      root.style.width = `${window.innerWidth}px`
+      const gutter = window.matchMedia('(pointer: fine)').matches
+        ? Math.max(0, window.innerWidth - document.documentElement.clientWidth)
+        : 0
+      root.style.setProperty('--sb-gutter', `${gutter}px`)
+    }
+    fit()
+    window.addEventListener('resize', fit)
+    return () => {
+      body.style.overflow = prevOverflow
+      window.removeEventListener('resize', fit)
+      if (root) root.style.width = ''
+    }
+  }, [])
+
+  // A true modal for the keyboard, not just the eye. aria-modal announces the page as
+  // inaccessible but doesn't make it so: Tab still walked the faded-out page underneath (its
+  // controls sit at opacity 0 for the Safari toolbar fix — focusable yet fully invisible).
+  // `inert` on every other <body> child makes the browser enforce the boundary natively —
+  // unfocusable, unclickable, hidden from assistive tech — so Tab cycles the dialog's own
+  // controls. Focus moves onto the dialog on open; the openers hand it back to the asset's
+  // element on close.
+  useEffect(() => {
+    const root = rootRef.current
+    const touched: HTMLElement[] = []
+    for (const el of Array.from(document.body.children)) {
+      if (el === root || !(el instanceof HTMLElement) || el.inert) continue
+      el.inert = true
+      touched.push(el)
+    }
+    root?.focus({ preventScroll: true })
+    return () => touched.forEach((el) => { el.inert = false })
+  }, [])
+
+  // Chrome/Android and pre-26 Safari tint their toolbar from <meta name="theme-color"> (Safari 26
+  // itself ignores it — that case is handled by the <html>/<body> background above). The site's
+  // default is a prefers-color-scheme pair that (a) doesn't track next-themes' class dark mode and
+  // (b) can out-rank a plain override. While open, remove those and install a single meta pinned to
+  // the modal's exact background; restore on close.
+  useLayoutEffect(() => {
+    const head = document.head
+    const saved = Array.from(head.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'))
+    saved.forEach((m) => m.remove())
+    const meta = document.createElement('meta')
+    meta.name = 'theme-color'
+    meta.content = dark ? '#18181b' : '#ffffff'
+    head.appendChild(meta)
+    return () => { meta.remove(); saved.forEach((m) => head.appendChild(m)) }
+  }, [dark])
+
+  // iOS 26 Safari dropped `theme-color` and derives its translucent toolbar tint from the
+  // <html>/<body> background-color, so pin BOTH to the modal's exact color while open — that's
+  // what the bar samples. Now that the modal reads --color-bg, the pin is the page's own color,
+  // so it is visually a no-op (it used to snap the page to a lighter shade). (The site's fixed top
+  // bar isn't special-cased: it's a <body> child, so the page-fade effect fades it out with the
+  // rest of the content — no reason to hard-hide it, which just made it vanish instantly.)
+  // Restored on close.
+  useLayoutEffect(() => {
+    const html = document.documentElement
+    const prevBodyBg = document.body.style.backgroundColor
+    const prevHtmlBg = html.style.backgroundColor
+    document.body.style.backgroundColor = BG
+    html.style.backgroundColor = BG
+    return () => {
+      document.body.style.backgroundColor = prevBodyBg
+      html.style.backgroundColor = prevHtmlBg
+    }
+  }, [])
+
+  // Safari's translucent bottom bar blurs the scrolled DOCUMENT beneath it, and a fixed
+  // overlay does NOT occlude that view — so no matter how opaque the modal was, the page kept
+  // peering through the bar. The cure used to be fading every other <body> child to ~0 and
+  // letting the bar blur the bare modal-colored body. That held until the swipe-down reveal
+  // exposed its weakness: the bar rebuilds its blur of REAPPEARING in-document content
+  // LAZILY (~1s), so the strip behind it sat as a flat modal-colored box and popped late —
+  // while a tap-close (instant unmount) updated instantly. Warm-layer opacity floors and
+  // post-teardown repaint nudges did not move it; reappearing content is simply the slow path.
+  //
+  // So nothing reappears anymore. The page stays at FULL opacity the whole time, and a VEIL —
+  // an absolutely-positioned in-document element (NOT fixed, so the bar provably samples it)
+  // covering the viewport behind the modal — carries the modal color instead. The open fades
+  // the veil IN over the unchanged page (perceived content visibility is (1-eased)² either
+  // way — scrim over veil now, scrim over fading page before — so the look is identical), and
+  // the swipe-down reveal fades it OUT: a DISAPPEARING in-document layer, the direction the
+  // bar's backdrop handles live. A tap-close removes it with the unmount, which was already
+  // instant. The veil floors at VEIL_MIN_OPACITY so its layer never tears down mid-session.
+  useLayoutEffect(() => {
+    const root = rootRef.current
+    if (!root || root.parentElement !== document.body) return
+    const scrim = scrimRef.current
+    const veil = document.createElement('div')
+    veil.setAttribute('aria-hidden', 'true')
+    // Viewport-covering with 200px of slack both ends (bar geometry, rubber-banding, rotation
+    // mid-gesture); re-fitted on resize. Scroll is locked while open, so top stays valid.
+    const fitVeil = () => {
+      veil.style.top = `${window.scrollY - 200}px`
+      veil.style.height = `${window.innerHeight + 400}px`
+    }
+    Object.assign(veil.style, {
+      position: 'absolute',
+      left: '0',
+      right: '0',
+      // Under the modal (z-50), above everything the page stacks (the header is 45).
+      zIndex: '49',
+      pointerEvents: 'none',
+      // The scrim's own resolved color — the veil is the scrim's in-document twin.
+      backgroundColor: scrim ? getComputedStyle(scrim).backgroundColor : '#fff',
+      opacity: !originRect || reduceMotion ? '1' : String(VEIL_MIN_OPACITY),
+    })
+    fitVeil()
+    window.addEventListener('resize', fitVeil)
+    document.body.appendChild(veil)
+    veilRef.current = veil
+    return () => {
+      window.removeEventListener('resize', fitVeil)
+      veil.remove()
+      veilRef.current = null
+      // Belt and suspenders for any straggler blur the bar still holds after teardown: two
+      // frames later (after the opener's exact scroll restore), move the page 1px and put it
+      // back — the backdrop provably tracks scroll.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const sy = window.scrollY
+        window.scrollTo(window.scrollX, sy > 0 ? sy - 1 : sy + 1)
+        requestAnimationFrame(() => window.scrollTo(window.scrollX, sy))
+      }))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // The open transition: one main-thread rAF loop fades the scrim and the veil in together.
+  // Main-thread inline writes, not WAAPI/CSS: the bar samples the main-thread paint, so a
+  // composited fade would read there as a cut. Deep-link opens and reduced motion skip the
+  // loop entirely (the veil mounted at 1, the scrim keeps its default opaque state).
+  useLayoutEffect(() => {
+    if (!originRect || reduceMotion) return
+    const scrim = scrimRef.current
+    const veil = veilRef.current
+    // THE PAGE MAY NOT START DISAPPEARING BEFORE ITS REPLACEMENT IS ON SCREEN: the loop is
+    // gated on the clone's first painted frame (flightPainted). The scrim, whose default
+    // state is opaque, is made transparent HERE — before the gate — or the whole screen goes
+    // solid for the ~40ms until the clone paints. That placement is load-bearing.
+    if (scrim) scrim.style.opacity = '0' // start transparent; the loop eases it back to 1
+    if (!flightPainted) return
+    // 550ms, up from 350: at 350 with the cubic ease the page was two-thirds gone 105ms after
+    // the click — it read as the page being yanked away rather than receding behind the photo.
+    const DURATION = slowMo ? 3000 : 550 // shift-click slow-mo stretches the fade with the spring
+    // Integrate CLAMPED deltas rather than reading the wall clock: Safari drops frames through
+    // the modal's first commit, and a wall-clock fade teleports across the gap — a stall can
+    // never turn this dissolve into a cut.
+    let last = 0
+    let elapsed = 0
+    const frame = (now: number) => {
+      if (!last) { last = now; openFadeRafRef.current = requestAnimationFrame(frame); return }
+      elapsed += Math.min(now - last, 32)
+      last = now
+      const t = Math.max(0, Math.min(1, elapsed / DURATION))
+      const eased = 1 - (1 - t) ** 2 // ease-out quad — softer start than the old cubic, so the page lingers
+      if (veil) veil.style.opacity = String(Math.max(VEIL_MIN_OPACITY, eased)) // the bar's white rises
+      if (scrim) scrim.style.opacity = String(eased)                          // the viewport's white, same curve
+      if (t < 1) openFadeRafRef.current = requestAnimationFrame(frame)
+    }
+    // The id lives in openFadeRafRef (not a local) so the swipe-down reveal can cancel this
+    // loop the moment a drag starts and own the opacity channel mid-open.
+    openFadeRafRef.current = requestAnimationFrame(frame)
+    return () => {
+      cancelAnimationFrame(openFadeRafRef.current)
+      if (scrim) scrim.style.opacity = ''
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flightPainted])
+
+  useLayoutEffect(() => {
+    if (containerRef.current) setTargetRect(containerRef.current.getBoundingClientRect())
+  }, [])
+
+  const width = () => containerRef.current?.clientWidth ?? window.innerWidth
+
+  // Nav is ready as soon as the track has been measured (targetRect) — NOT once the whole open
+  // fly-in has finished. Gating on the open animation dropped every arrow pressed in its first
+  // few hundred ms (longer on a cold/slow load) — the "presses thrown away". If a press lands
+  // before the fly-in ends, commit() snaps it complete so the (now visible) track is what slides.
+  const navReadyRef = useRef(false)
+  useEffect(() => { navReadyRef.current = !!targetRect }, [targetRect])
+
+  // Index-first navigation. A press commits the new photo IMMEDIATELY (so arrows always respond
+  // and naturally interrupt an in-flight slide — the press takes priority), then the incoming
+  // slide springs home from wherever the track is right now. `x.get() + dir*w` covers every
+  // start point in one expression: idle (0), a mid-slide interrupt, or a half-finished finger
+  // drag — so the motion is always continuous, never a snap. No queue, no end-of-slide rebase.
+  const commit = (dir: 1 | -1, slow = false) => {
+    if (!navReadyRef.current) return
+    // At a boundary there's no neighbour to reveal — settle any drag/interrupt back to centre.
+    if ((dir === 1 && index >= total - 1) || (dir === -1 && index <= 0)) {
+      animate(x, 0, SPRING)
+      return
+    }
+    // Pressed before the open fly-in finished: reveal the container now so the slide animates
+    // the real track rather than swiping behind the flying clone.
+    if (!animDone) flushSync(() => setAnimDone(true))
+    // The nav is about to slide the track: the (possibly still-overlapping) stationary clone
+    // must not sit on top of it. Ends the 300ms handoff overlap early.
+    settleClone()
+    const startX = x.get() + dir * width()
+    const target = dir === 1 ? nextPhoto : prevPhoto
+    x.stop()
+    flushSync(() => { if (dir === 1) onNext(); else onPrev() })
+    // A nav DURING the dock's entrance ends the entrance: the incoming caption card is keyed
+    // per photo, and mounting it with .lightbox-dock-enter still applied replayed the whole
+    // rise from below the fold — delay and backwards fill included — so the new photo showed
+    // no caption for a beat, then it climbed in late. Batched with setCaptionPhoto, so the
+    // remounted card's first render is already class-free.
+    setDockEntered(true)
+    if (target) setCaptionPhoto(target)
+    // Position the just-committed track synchronously (jump + a direct write, same task as the
+    // index shift) so the swap lands in one paint with nothing displaced, then spring to centre.
+    x.jump(startX)
+    if (trackRef.current) trackRef.current.style.transform = `translateX(${startX}px)`
+    busy.current = true
+    animate(x, 0, { ...(slow ? SLOW_NAV_SPRING : reduceMotion ? NAV_SPRING_REDUCED : NAV_SPRING), onComplete: () => { busy.current = false } })
+  }
+
+  // Slide the image down and off, then unmount.
+  const dismiss = () => {
+    // A SHORT drop, not a ride to the bottom of the screen: the content is fully transparent
+    // by 280px of travel (dragOpacity), so animating to window.innerHeight just meant watching
+    // nothing move for most of the duration. Drop a further ~200px from wherever the finger
+    // let go — always past both the fade end and the page-restore distance (REVEAL_DRAG), so
+    // the dissolve completes and the page beneath is fully back before the unmount.
+    const target = Math.max(REVEAL_DRAG + 60, yDrag.get() + 200)
+    animate(yDrag, target, { duration: 0.16, ease: 'easeIn' })
+    window.setTimeout(onClose, 150)
+  }
+
+  // Arrow keys animate through the same track as swipe / on-screen arrows.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Modified chords belong to the browser (Alt+ArrowLeft = Back, Cmd+ArrowLeft = Home) —
+      // only a bare arrow (or Shift+arrow, the slow-mo debug) navigates photos.
+      if (e.altKey || e.metaKey || e.ctrlKey) return
+      if (e.key === 'ArrowRight') { e.preventDefault(); commit(1, e.shiftKey) }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); commit(-1, e.shiftKey) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [index, total])
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    if (busy.current) return
+    x.stop(); yDrag.stop()
+    startX.current = e.touches[0].clientX
+    startY.current = e.touches[0].clientY
+    axis.current = null
+    lock.current = null
+  }
+  const onTouchMove = (e: React.TouchEvent) => {
+    if (busy.current) return
+    const dx = e.touches[0].clientX - startX.current
+    const dy = e.touches[0].clientY - startY.current
+    if (axis.current === null && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+      axis.current = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
+      // A recognized gesture is about to move the media out from under the (possibly
+      // still-overlapping) stationary clone — end the handoff overlap now.
+      settleClone()
+      // Remember WHERE the axis locked. The 8px the finger travelled to trigger the lock is not
+      // drag — it is the gesture being recognised. Feeding the raw delta in meant the photo
+      // teleported those 8px the instant the lock fired, and then tracked the finger. That initial
+      // jump is what breaks the sense that you are holding the thing: the image should start moving
+      // from exactly where your finger is, and stay under it from then on.
+      lock.current = { x: dx, y: dy }
+    }
+    const lx = lock.current?.x ?? 0
+    const ly = lock.current?.y ?? 0
+    if (axis.current === 'x') {
+      const ox = dx - lx
+      // Rubber-band when there's no neighbour to reveal.
+      const resist = (index <= 0 && ox > 0) || (index >= total - 1 && ox < 0)
+      x.set(resist ? ox * 0.35 : ox)
+    } else if (axis.current === 'y') {
+      yDrag.set(Math.max(0, dy - ly)) // downward only, from the point of lock
+    }
+  }
+  const onTouchEnd = () => {
+    const a = axis.current
+    axis.current = null
+    if (busy.current) return
+    if (a === 'x') {
+      const dx = x.get()
+      const threshold = Math.min(width() * 0.25, 90)
+      if (dx <= -threshold) commit(1)
+      else if (dx >= threshold) commit(-1)
+      else animate(x, 0, SPRING)
+    } else if (a === 'y') {
+      if (yDrag.get() > CLOSE_DRAG) dismiss()
+      else animate(yDrag, 0, SPRING)
+    }
+    // A tap (no axis lock) falls through to the click handler → close.
+  }
+
+  return (
+    <m.div
+      ref={rootRef}
+      // Fixed, full-viewport via left:0 + width (not right:0). `w-screen` is only the pre-JS fallback;
+      // the scroll-lock effect sets width to window.innerWidth so the modal also covers the reserved
+      // scrollbar gutter (100vw stops short of it) — no bare strip on the right, and without dropping
+      // `scrollbar-gutter` (dropping it reflowed the page and shoved the fixed header sideways).
+      className="fixed inset-y-0 left-0 w-screen z-50 flex flex-col select-none overflow-hidden outline-none"
+      // Programmatically focusable so focus enters the dialog on open (see the inert effect);
+      // -1 keeps it out of the Tab order itself.
+      tabIndex={-1}
+      // Transparent root; the backdrop is an absolute scrim child that FADES IN (below), so the
+      // background eases in instead of snapping opaque on open. (Safari's toolbar is kept solid
+      // separately by fading the page content out — see the page-fade effect — since the toolbar
+      // blurs the document behind this fixed overlay, not the overlay itself.)
+      // overscrollBehavior: iOS must not rubber-band the page beneath when a drag starts on
+      // chrome (dock, close button) — the media container already owns touchAction: none.
+      style={{ color: FG, overscrollBehavior: 'contain' }}
+      role="dialog"
+      aria-modal="true"
+      aria-label={caption ?? 'Photo'}
+      onClick={onClose}
+    >
+      {/* Backdrop scrim — its opacity is eased 0→1 by the page-fade rAF loop (see the effect above),
+          so the background fades in together with the page fading out rather than snapping opaque.
+          Kept `absolute`, never `fixed` + negative z — that composited ABOVE the photo in Safari and
+          hid it. */}
+      <div ref={scrimRef} className="absolute inset-0 -z-10" style={{ backgroundColor: BG }} />
+      {/* Arrow keys and the Next/Previous buttons swap the photo without any announcement (a
+          changed aria-label on the dialog is never re-read) — this quiet status line is what
+          a screen reader hears on each navigation. */}
+      <div role="status" className="sr-only">
+        {`Photo ${index + 1} of ${total}${caption ? `: ${caption}` : ''}`}
+      </div>
+      {/* Inner layer carries the swipe-down-to-dismiss transform. */}
+      {/* The swipe used to translate THIS whole layer — chrome included. The drag now lives
+          on the media area alone (and the rail fades in place): the close button and arrows
+          hold still while the photo is pulled away (2026-07-24). */}
+      <div className="relative flex flex-1 flex-col min-h-0">
+      {/* Close — sits above the image; the surrounding layer passes clicks through. */}
+      {/* Chrome waits for the clone handoff (animDone): during the fly-in the photo is
+          an animated clone on its own compositing layer, and backdrop-filter cannot
+          sample it — glass shown mid-flight blurs nothing and the blur snaps in at
+          landing, in every engine. Chrome that appears AT the handoff wears a working
+          blur from its first frame. .lightbox-dock-hold rides with the component
+          (stale-globals-safe), not globals.css. */}
+      <style>{`
+        .lightbox-dock-hold { opacity: 0 !important; animation: none !important; }
+        .lightbox-dock-fade { animation: lightbox-dock-fade 0.35s ease-out both; }
+        @keyframes lightbox-dock-fade { from { opacity: 0; } to { opacity: 1; } }
+        @media (prefers-reduced-motion: reduce) { .lightbox-dock-fade { animation-duration: 0.01s; } }
+      `}</style>
+      <m.div
+        className="absolute inset-0 pointer-events-none z-30"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: animDone ? 1 : 0 }}
+        transition={{ duration: 0.2 }}
+      >
+        {/* Fades with the drag but does NOT move. It was the last opaque thing on the modal
+            at unmount, and iOS 26's bottom-bar backdrop cache held a snapshot of it (plus the
+            modal's white field) for ~a second after a swipe dismiss — a ghost close button.
+            Fully-faded chrome means any stale snapshot is of nothing. The outer overlay owns
+            the entrance opacity, so the drag binding needs its own layer. */}
+        <m.div className="absolute inset-0" style={{ opacity: dragOpacity }}>
+        <button
+          onClick={(e) => { e.stopPropagation(); onClose() }}
+          aria-label="Close"
+          // touchAction: taps only — a drag starting on the button must not scroll the page beneath.
+          style={{ touchAction: 'manipulation' }}
+          data-on-photo={chromeOnPhoto.close || undefined}
+          className="lightbox-chrome-btn pointer-events-auto absolute top-3 right-[calc(16px+var(--sb-gutter,0px))] flex h-11 w-11 cursor-pointer items-center justify-center rounded-full text-[var(--color-fg)] transition-colors hover:bg-[var(--color-surface)] active:bg-[var(--color-surface)]"
+        >
+          <IconClose />
+        </button>
+        </m.div>
+      </m.div>
+
+      {/* Image area — full width so the slide track can carry an asset fully off-screen; the 16px
+          side margins live on each slide's inner box (see Slide), not here, so they never clip the
+          animation. No vertical padding: the photo owns the full lightbox height. */}
+      {/* max-sm:pb-[var(--dock-h)]: on mobile the chrome never hides and a width-constrained
+          photo doesn't reach the viewport bottom, so without this the glass card straddles
+          the photo's bottom edge — half on photo, half on backdrop. Reserving the dock's
+          measured height (ResizeObserver below) centers the photo in the space above it.
+          Desktop keeps true full-bleed: the photo fills the height and the dock overlays. */}
+      <m.div className="flex-1 min-h-0 flex max-sm:pb-[var(--dock-h,0px)]" style={{ y: yDrag, opacity: dragOpacity }}>
+        <div
+          ref={containerRef}
+          className="flex-1 min-w-0 relative overflow-hidden"
+          style={{ opacity: containerVisible ? 1 : 0, touchAction: 'none' }}
+          onTouchStart={onTouchStart}
+          onTouchMove={onTouchMove}
+          onTouchEnd={onTouchEnd}
+        >
+          <m.div ref={trackRef} className="absolute inset-0" style={{ x }}>
+            {/* Neighbours do not MOUNT until the open has landed. They are off-screen the whole time
+                (translateX ±100%), but mounting them meant React committing two extra <Image>/<video>
+                trees on the click frame — and that commit is what delayed the spring's first frame.
+                They were already deferring their hi-res layer for the same reason; this defers the
+                whole slide. Nav still works: commit() flushSync's animDone before it slides. */}
+            {prevPhoto && animDone && <Slide key={prevPhoto.id} photo={prevPhoto} offset="-100%" hiRes showOutline={showOutline} />}
+            <Slide
+              key={photo.id}
+              photo={photo}
+              offset="0%"
+              priority
+              // The hi-res layer waits for the landing, exactly as the neighbours' does.
+              //
+              // The clicked slide mounted TWO <Image>s on the click frame: the base (the origin's
+              // already-decoded file — instant, from cache) and a FRESH 2048px optimizer fetch on
+              // top of it. That second fetch and its decode landed right on the spring's opening
+              // frames. Measured in Safari at 60fps: the first two frames of the open took 32ms and
+              // 37ms — two missed vsyncs — and every frame after them was a clean 16-17ms. That is
+              // the "jitter or two" when opening an image.
+              //
+              // Nothing is lost by waiting: the base layer is the exact file already on screen, so
+              // the flight and the landing look identical either way; the sharp layer just fades in
+              // once the animation is out of the way, which is already how every other slide behaves.
+              hiRes={animDone}
+              showOutline={showOutline}
+              armed={animDone}
+              getCloneTime={getCloneTime}
+              onLoad={() => setImageLoaded(true)}
+            />
+            {nextPhoto && animDone && <Slide key={nextPhoto.id} photo={nextPhoto} offset="100%" hiRes showOutline={showOutline} />}
+          </m.div>
+        </div>
+      </m.div>
+
+      {/* Corner dock — the /lab/photo-chrome Option B chrome, productionized. The photo
+          fills the entire lightbox; caption + EXIF ride a dark-material glass card
+          centered at the bottom, flanked by the rail's original prev/next buttons
+          (theme ink, surface hover), all floating over the photo. Dark material (black-tinted blur, boosted saturation)
+          is the HIG direction for light text over photos — readable on any image, no
+          scrim. The caption is always present (the 5s auto-hide was removed — it kept
+          fighting the glass and the reader alike). The dock fades with the swipe-down drag via dragOpacity;
+          while that ancestor opacity dips below 1 the card's blur goes flat (backdrop
+          root) — accepted, it's a dismissal gesture over a moving photo.
+
+          Entrance DURING the fly-in: arrows and caption card rise in lockstep from
+          below the viewport edge alongside the photo's flight. It is a pure CSS
+          keyframes animation (.lightbox-dock-enter, globals) applied to the dock's
+          CHILDREN, never this dock: motion re-applies its cached transform/will-change
+          to this element on every re-render (capOnPhoto and dockEntered flip at
+          runtime), and any transform on an ANCESTOR of the glass card makes it the
+          backdrop root — the card's blur samples a transparent subtree instead of the
+          photo (flat tint; shift-click slow-mo turned that into 3.6s of missing blur).
+          The card's OWN transform keeps its backdrop sampling live, so the glass blurs
+          for the whole ride up. dockRiseClass comes off once the entrance ends —
+          per-photo remounts of the keyed card must not replay it. motion owns ONLY the
+          dragOpacity binding here (opacity 1 at rest — no backdrop root; it dips
+          during the dismiss drag, which is accepted). Runs once per open. */}
+      <m.div
+        ref={dockRef}
+        onClick={(e) => e.stopPropagation()}
+        // Slow-mo stretches the rise via the vars the children's animation reads;
+        // the first animationend flips dockEntered (class removal) and re-measures
+        // the caption geometry with everything at rest.
+        // touchAction manipulation: taps on the dock (arrows, caption card) stay taps — a drag
+        // starting here must not rubber-band the page beneath the modal on iOS.
+        style={{ opacity: dragOpacity, touchAction: 'manipulation', ...(slowMo ? ({ '--dock-rise-dur': '3s', '--dock-rise-delay': '0.6s' } as React.CSSProperties) : null) }}
+        onAnimationEnd={(e) => {
+          if ((e as React.AnimationEvent).animationName !== 'lightbox-dock-fade') return
+          setDockEntered(true)
+          measureCapRef.current()
+        }}
+        className="lightbox-rail-foot absolute inset-x-0 bottom-0 z-[25]"
+      >
+        {/* items-end: a long caption grows the card UPWARD while the arrows stay anchored
+            to the bottom edge instead of riding up with the row's centerline. On mobile the
+            caption takes the full dock width on its own line ABOVE the arrows (order-first +
+            basis-full wraps it); justify-between then spreads the arrows to the edges. */}
+        {/* 16px side padding at every size — the photo slides carry 16px inner margins, so
+            card edges and arrow buttons sit on the same vertical lines as the photo. */}
+        <div className="flex max-sm:flex-wrap items-end justify-between gap-3 pl-4 pr-[calc(16px+var(--sb-gutter,0px))] pb-1">
+          {index > 0 ? (
+            <button
+              ref={prevBtnRef}
+              onClick={(e) => { e.stopPropagation(); commit(-1, e.shiftKey) }}
+              aria-label="Previous photo"
+              data-on-photo={chromeOnPhoto.prev || undefined}
+              className={`${dockRiseClass}lightbox-chrome-btn flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full text-[var(--color-fg)] transition-colors hover:bg-[var(--color-surface)] active:bg-[var(--color-surface)]`}
+            >
+              <IconArrow dir="left" />
+            </button>
+          ) : (
+            <span className={`${dockRiseClass}h-11 w-11 shrink-0`} />
+          )}
+          {/* The caption card is always present — the 5s auto-hide is gone
+              (2026-07-31; it kept fighting the glass and the reader alike). */}
+          <div className="flex min-w-0 flex-1 justify-center max-sm:order-first max-sm:basis-full">
+            {hasCaptions && (capCaption || capExif || capSource || showPermalink) && (
+              <div
+                key={captionPhoto.id}
+                ref={capCardRef}
+                data-on-photo={capOnPhoto ? '' : undefined}
+                className={`${dockRiseClass}lightbox-caption-card max-w-full rounded-xl px-3.5 py-2.5 text-center`}
+              >
+                {capCaption && (
+                  <p className="font-sans text-[14px] leading-[1.35]" style={{ color: 'var(--cap-fg)' }}>{capCaption}</p>
+                )}
+                {(capSource || capExif || showPermalink) && (
+                  // Wraps rather than truncates (mobile EXIF must stay whole, by design);
+                  // the roomier leading keeps link underlines off the next line's ascenders.
+                  <p className={`${capCaption ? 'mt-1 ' : ''}font-mono text-[11px] leading-[1.5]`} style={{ color: 'var(--cap-muted)' }}>
+                    {capSource && (
+                      <a
+                        href={capSource.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="unsplash-link unsplash-link-glass"
+                        style={{ color: 'var(--cap-fg)' }}
+                      >
+                        {capSource.label}
+                      </a>
+                    )}
+                    {showPermalink && (
+                      <>
+                        {capSource && ' · '}
+                        {/* New tab like the Unsplash link — an in-place route swap unmounts this
+                            body-portaled modal mid-View-Transition and React crashes. */}
+                        <a
+                          href={`/photos/${captionPhoto.id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="unsplash-link unsplash-link-glass"
+                          style={{ color: 'var(--cap-fg)' }}
+                        >
+                          Permalink
+                        </a>
+                      </>
+                    )}
+                    {capExif && <span>{capSource || showPermalink ? ` · ${capExif}` : capExif}</span>}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+          {index < total - 1 ? (
+            <button
+              ref={nextBtnRef}
+              onClick={(e) => { e.stopPropagation(); commit(1, e.shiftKey) }}
+              aria-label="Next photo"
+              data-on-photo={chromeOnPhoto.next || undefined}
+              className={`${dockRiseClass}lightbox-chrome-btn flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full text-[var(--color-fg)] transition-colors hover:bg-[var(--color-surface)] active:bg-[var(--color-surface)]`}
+            >
+              <IconArrow dir="right" />
+            </button>
+          ) : (
+            <span className={`${dockRiseClass}h-11 w-11 shrink-0`} />
+          )}
+        </div>
+      </m.div>
+
+      {cloneTarget && originRect && (
+        <m.div
+          className="absolute overflow-hidden pointer-events-none"
+          // Sits at the photo's final rect; a transform (translate + uniform scale from the
+          // thumbnail) does the flight, so only the compositor works — no per-frame layout.
+          //
+          // The clone STAYS MOUNTED at opacity 0 after the handoff instead of unmounting.
+          // Unmounting it forced Safari to tear down and re-composite the layer tree at the
+          // exact moment the modal video's fresh layer was still being promoted — the transient
+          // "not fully opaque" washout that read as a white flash at the end of the open. An
+          // opacity flip destroys nothing; the whole subtree simply leaves with the modal.
+          style={{
+            zIndex: 20,
+            left: cloneTarget.left,
+            top: cloneTarget.top,
+            width: cloneTarget.width,
+            height: cloneTarget.height,
+            transformOrigin: '0 0',
+            opacity: cloneGone ? 0 : 1,
+          }}
+          initial={{
+            x: originRect.left - cloneTarget.left,
+            y: originRect.top - cloneTarget.top,
+            scaleX: originRect.width / cloneTarget.width,
+            scaleY: originRect.height / cloneTarget.height,
+          }}
+          animate={fly ? { x: 0, y: 0, scaleX: 1, scaleY: 1 } : {
+            x: originRect.left - cloneTarget.left,
+            y: originRect.top - cloneTarget.top,
+            scaleX: originRect.width / cloneTarget.width,
+            scaleY: originRect.height / cloneTarget.height,
+          }}
+          transition={openSpring}
+          // Guarded on `fly`: before the gate opens, animate === initial, and motion reports that
+          // no-op as "complete". Acting on it would flip animDone, hide the clone, and skip the
+          // flight entirely.
+          onAnimationComplete={() => { if (fly) flushSync(() => setAnimDone(true)) }}
+        >
+          {photo.videoSrc ? (
+            FLY_LIVE_VIDEO ? (
+              // The clicked clip KEEPS PLAYING while it flies: a muted clone resumes from the
+              // origin's exact frame (videoTime). But a fresh <video> paints NOTHING until it has
+              // metadata AND has finished seeking to that frame — and an unpainted <video> is
+              // TRANSPARENT (measured in Safari), so the clone was a HOLE that showed the white
+              // scrim straight through it. Safari also drops `poster` as soon as the video starts
+              // loading, so the poster did not cover the gap the way it does in Chrome.
+              //
+              // Hence the base layer below: the frozen frame ALWAYS paints, and the live <video>
+              // sits on top of it and covers it the moment it has a real frame. Playback is
+              // preserved; the hole is not possible.
+              //
+              // This is why the flash only ever hit the landscape <Video>: it is a long clip, so
+              // the clone seeks ~21s in, which Safari takes real time to do. The bezel clips are
+              // short and seek almost instantly, so their hole was never visible.
+              <>
+                <FlightStill
+                  photo={photo}
+                  onPainted={fireFlightPainted}
+                  // Hidden while the live video flies (its click frame goes stale within
+                  // frames), then resurfaced with FRESH pixels for the handoff window.
+                  hidden={cloneVideoShown && !stillResurfaced}
+                  repaintRef={stillRepaintRef}
+                />
+                <FlightVideo photo={photo} videoRef={cloneVideoRef} onShown={() => setCloneVideoShown(true)} />
+              </>
+            ) : photo.flightPoster ? (
+              // FLY_LIVE_VIDEO off: fly the FROZEN frame instead of a second live <video>.
+              // Same pixels (flightPoster is a canvas snapshot of the exact clicked frame), but
+              // no video element is instantiated inside the animating layer. The modal player still
+              // lands on the right frame — it starts from photo.videoTime regardless — so the clip
+              // simply does not advance during the flight.
+              <Image
+                fill
+                src={photo.flightPoster}
+                className="object-contain"
+                alt=""
+                aria-hidden
+                sizes="100vw"
+                unoptimized
+                priority
+                onLoad={fireFlightPainted}
+              />
+            ) : null // clip had no decodable frame at click (never loaded) — fly nothing; the
+                     // origin simply stays put until the modal player takes over.
+          ) : (
+            <Image
+              fill
+              // flightSrc = the origin's already-decoded file, served verbatim — the clone
+              // paints on frame 1 of the flight even on a cold cache. (A fresh optimizer URL
+              // here often finished loading AFTER the spring, so no fly-in was ever seen.)
+              src={photo.flightSrc || photo.urls.regular}
+              className="object-contain"
+              alt=""
+              aria-hidden
+              sizes="100vw"
+              unoptimized={!!photo.flightSrc || !photo.urls.regular.startsWith('/')}
+              priority
+              onLoad={fireFlightPainted}
+            />
+          )}
+        </m.div>
+      )}
+      </div>
+    </m.div>
+  )
+}

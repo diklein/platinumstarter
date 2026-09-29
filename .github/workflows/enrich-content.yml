@@ -1,0 +1,78 @@
+name: Enrich content
+
+# Posts published straight to main (e.g. via Obsidian Git commit-and-sync) never open a PR, so
+# the PR-only content-review workflow can't enrich them — and Obsidian Git doesn't run local git
+# hooks either. This runs on every push to main: it fills any empty image alt text and any missing
+# SEO meta descriptions in the changed posts, then commits the result back with [skip ci] (so it
+# doesn't retrigger). Mirrors the local pre-push hook, which does the same for CLI pushes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/content/**/*.mdx'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: enrich-content-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  enrich:
+    # Skips on a fork or a clone without the keys: every step is gated on this flag.
+    env:
+      HAS_KEYS: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+    name: Alt text + SEO descriptions
+    runs-on: ubuntu-latest
+    # The bot's own commit carries [skip ci]; GitHub already skips it — this is belt-and-suspenders.
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.HAS_KEYS == 'true'
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        if: env.HAS_KEYS == 'true'
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - run: npm ci
+        if: env.HAS_KEYS == 'true'
+
+      - name: Collect MDX files changed in this push
+        if: env.HAS_KEYS == 'true'
+        id: changed
+        run: |
+          BEFORE='${{ github.event.before }}'
+          # First push / force-push can report an empty or unknown "before" — fall back to the parent.
+          if ! git rev-parse --quiet --verify "$BEFORE^{commit}" >/dev/null 2>&1; then
+            BEFORE='${{ github.sha }}~1'
+          fi
+          FILES=$(git diff --name-only --diff-filter=d "$BEFORE" '${{ github.sha }}' -- 'src/content/**/*.mdx' | tr '\n' ' ')
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          echo "Changed MDX: ${FILES:-(none)}"
+
+      - name: Generate alt text
+        if: steps.changed.outputs.files != ''
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CHANGED_FILES: ${{ steps.changed.outputs.files }}
+        run: echo "$CHANGED_FILES" | xargs node scripts/generate-alt-text.mjs
+
+      - name: Generate SEO descriptions
+        if: steps.changed.outputs.files != ''
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CHANGED_FILES: ${{ steps.changed.outputs.files }}
+        run: echo "$CHANGED_FILES" | xargs node scripts/generate-seo.mjs
+
+      - name: Commit enrichments
+        if: env.HAS_KEYS == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          commit_message: "fix(content): auto-generate alt text + SEO descriptions [skip ci]"
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"

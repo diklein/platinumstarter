@@ -1,0 +1,1795 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@source not "../generated/**";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Step 1: Semantic raw tokens — sRGB OKLCH values */
+/* 2026-08-05: a Vercel build served a STALE compile of this file (new :root tokens missing
+   in prod while fresh utilities referenced them — invisible palette <mark>). If tokens added
+   here ever fail to appear in production, suspect the build cache before the code: redeploy
+   without cache. */
+:root {
+  /* MOTION TOKENS — the CSS stand-in for the house spring (src/lib/motion.ts).
+     Anything animated by motion/react uses the real spring; anything driven by a CSS transition
+     (Base UI popups, which own their own enter/exit) uses these, so the two are changed together
+     rather than drifting apart. The control point past 1 is what produces the overshoot.
+     Exits never bounce: springing back out reads as the thing failing to leave. */
+  /* y1 was 1.56 (~10% overshoot) while the JS house spring is ζ≈0.86 (~0.5%) — the two
+     "springs" had different personalities, which is exactly the cohesion drift the token
+     exists to prevent. 1.30 lands at ~3%: still a visible settle on the palette, a third
+     of the old loudness, and within shouting distance of the JS spring's restraint. */
+  --ease-spring: cubic-bezier(0.34, 1.3, 0.64, 1);
+  --duration-spring: 240ms;
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --duration-exit: 150ms;
+
+  --color-bg: oklch(1 0 0);
+  --color-surface: oklch(0.94 0.006 240);
+  /* One step lighter than surface — a flat fill that reads as a field WITHOUT a border
+     (the /dkmediaviewer code blocks; the design-system preview wells were already mixing
+     this value by hand). Derived, so it tracks both themes. */
+  --color-surface-subtle: color-mix(in oklab, var(--color-surface) 50%, var(--color-bg));
+  --color-fg: oklch(0.14 0.008 240);
+  --color-muted: oklch(0.48 0.010 240);
+  --color-accent: oklch(0.51 0.27 27);
+  --color-destructive: var(--color-accent); /* merged: one warm red for accent + destructive */
+  /* The accent as a FILL carrying light text (::selection, the palette's <mark>, the toast
+     action). In light mode it IS the accent; dark mode keeps this deep light-mode red instead
+     of the lifted dark accent — the lifted red is tuned to be legible ON dark grounds, which
+     makes it too bright to put light text ON (near-white measured 3.3:1 on it; on this fill
+     it measures 6.1:1). */
+  --color-accent-fill: var(--color-accent);
+  --color-border: oklch(0.88 0.006 240);
+  /* Boundary-grade border for controls whose border is their only edge (text inputs).
+     --color-border is a hairline tuned for decorative rules (1.4:1 against the page, well
+     under the 3:1 WCAG 1.4.11 asks of component boundaries); this one measures 3.4:1 in
+     both themes. */
+  --color-border-strong: oklch(0.64 0.008 240);
+  /* A step stronger than --color-border, for the article body-to-footer divider (above the
+     hashtags) so that boundary reads as more than a hairline. Derived so it tracks both themes. */
+  --color-rule-strong: color-mix(in oklch, var(--color-border), var(--color-muted) 30%);
+  --color-secondary-bg: var(--color-surface);
+  /* The site mark's circle when it is NOT the active page (see site-mark.tsx). The circle
+     has to read against the page AND against the square, and those sit on opposite ends of
+     the ramp in each theme, so the two themes want different existing greys rather than one
+     shared value: light needs the lighter grey (L 0.76, against a white page and a near-black
+     square), dark is already right at muted (L 0.60, against a near-black page and a light
+     square). Aliased, not a new raw value. */
+  --color-mark-mute: var(--color-rule-strong);
+
+  /* shadcn bridge tokens */
+  --radius: 0.5rem;
+
+  /* GitHub contribution calendar levels (warm orange-red scale) */
+  --contrib-l0: oklch(0.91 0.006 240);
+  --contrib-l1: oklch(0.83 0.09 27);
+  --contrib-l2: oklch(0.70 0.16 27);
+  --contrib-l3: oklch(0.60 0.22 27);
+  --contrib-l4: oklch(0.51 0.27 27);
+
+  /* Categorical chart scale (any multi-series chart). The accent red leads,
+     then five distinct hues at matched weight, then a grey for the tail — so a ranked series
+     reads left-to-right as red → hues → quiet. Dark mode lifts L and tempers chroma exactly
+     as the accent does (0.51/0.27 → 0.65/0.16). */
+  --chart-1: var(--color-accent);
+  --chart-2: oklch(0.45 0.14 255); /* blue */
+  --chart-3: oklch(0.62 0.12 85); /* ochre — darkened from 0.70: that read 2.7:1 on white, under the 3:1 non-text floor */
+  --chart-4: oklch(0.52 0.11 155); /* green */
+  --chart-5: oklch(0.50 0.13 300); /* violet */
+  --chart-6: oklch(0.55 0.09 200); /* teal */
+  --chart-7: var(--color-muted); /* the tail goes quiet */
+}
+
+/* Forced-light region — pins the six role vars to their light values inside a dark page.
+   The inverse of `.dark`, for specimens that must stay light either way (the design-system
+   palette swatches and Themes card). Aliases (destructive, secondary-bg) follow via var(). */
+.light {
+  --color-bg: oklch(1 0 0);
+  --color-surface: oklch(0.94 0.006 240);
+  --color-fg: oklch(0.14 0.008 240);
+  --color-muted: oklch(0.48 0.010 240);
+  --color-accent: oklch(0.51 0.27 27);
+  --color-border: oklch(0.88 0.006 240);
+}
+
+.dark {
+  --color-bg: oklch(0.18 0.008 240);
+  /* Lifted above bg (was 0.16, visually identical to it) so quiet fills actually read in
+     dark, echoing the dark-border lift; sits between bg (0.18) and border (0.30). */
+  --color-surface: oklch(0.23 0.010 240);
+  --color-surface-subtle: color-mix(in oklab, var(--color-surface) 50%, var(--color-bg));
+  --color-fg: oklch(0.92 0.005 240);
+  /* 0.63, up from 0.60: muted on surface measured 4.26:1, under WCAG AA's 4.5:1 for small
+     text (the design-system chips are 11px). The lift clears AA on surface and improves
+     every muted pairing in dark; verified 4.81:1 after the change. */
+  --color-muted: oklch(0.63 0.010 240);
+  --color-accent: oklch(0.65 0.16 27);
+  --color-destructive: var(--color-accent);
+  --color-accent-fill: oklch(0.51 0.27 27); /* the light accent — see the :root note */
+  --color-border: oklch(0.30 0.010 240);
+  --color-border-strong: oklch(0.52 0.010 240); /* 3.4:1 on the dark page */
+  --color-rule-strong: color-mix(in oklch, var(--color-border), var(--color-muted) 30%);
+  --color-secondary-bg: oklch(0.35 0.010 240);
+  --color-mark-mute: var(--color-muted);
+
+  /* GitHub contribution calendar levels (warm scale, matching the accent) */
+  --contrib-l0: oklch(0.24 0.008 240);
+  --contrib-l1: oklch(0.32 0.07 27);
+  --contrib-l2: oklch(0.42 0.10 27);
+  --contrib-l3: oklch(0.54 0.13 27);
+  --contrib-l4: oklch(0.65 0.16 27);
+
+  /* Categorical chart scale, dark: lifted + tempered like the accent. */
+  --chart-2: oklch(0.66 0.11 255);
+  --chart-3: oklch(0.78 0.11 85);
+  --chart-4: oklch(0.68 0.10 155);
+  --chart-5: oklch(0.68 0.11 300);
+  --chart-6: oklch(0.68 0.08 200);
+}
+
+/* Step 2: Bridge semantic tokens to Tailwind utility classes + typography tokens */
+@theme {
+  --breakpoint-xs: 32rem; /* 512px — the header's More-menu floor: the overflow row keeps absorbing links down to here (2 links + More needs ~585px; below that the measured collapse hands off to the hamburger), so only true phone widths start on the mobile bar */
+  --breakpoint-md: 56.25rem; /* 900px — keeps iPhone landscape in mobile layout */
+  --breakpoint-wide: 108rem; /* 1728px — header stays on the consistent-spacing flex through laptop widths; the spread 12-col grid only returns on a genuinely wide external display (the grid's fixed columns crowd the links below this) */
+}
+
+@theme inline {
+  /* Color bridges — map shadcn expected names to our semantic tokens */
+  --color-background: var(--color-bg);
+  --color-foreground: var(--color-fg);
+  --color-card: var(--color-surface);
+  --color-card-foreground: var(--color-fg);
+  --color-popover: var(--color-surface);
+  --color-popover-foreground: var(--color-fg);
+  --color-primary: var(--color-accent);
+  --color-primary-foreground: oklch(0.98 0.005 240);
+  --color-secondary: var(--color-secondary-bg);
+  --color-secondary-foreground: var(--color-fg);
+  --color-muted: var(--color-surface);
+  --color-muted-foreground: var(--color-muted);
+  --color-accent: var(--color-accent);
+  --color-accent-foreground: var(--color-fg);
+  --color-destructive: var(--color-destructive);
+  --color-destructive-foreground: oklch(0.98 0.005 240);
+  --color-border: var(--color-border);
+  --color-input: var(--color-border);
+  --color-ring: var(--color-accent);
+  --radius: var(--radius);
+
+  /* shadcn Sidebar tokens — aliased to the same semantic set (rail on /design-system) */
+  --color-sidebar: var(--color-bg);
+  --color-sidebar-foreground: var(--color-fg);
+  --color-sidebar-accent: var(--color-surface);
+  --color-sidebar-accent-foreground: var(--color-fg);
+  --color-sidebar-border: var(--color-border);
+  --color-sidebar-ring: var(--color-accent);
+
+  /* Font stack tokens — CSS vars injected by next/font, with system fallbacks */
+  --font-sans: 'Geist', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'Courier New', monospace;
+
+  /* Typography scale — static UI token */
+  --text-label: 0.875rem;     /* 14px */
+
+  /* Fluid editorial scales — clamp(min, intercept + slope*vw, max) */
+  /* All anchored 375px→1440px; upper values tuned for laptop comfort */
+  --text-prose: clamp(1.125rem, 1.059rem + 0.282vw, 1.3125rem);         /* 18px → 21px @ 1440px */
+  --text-entry-title: clamp(1.3125rem, 1.246rem + 0.282vw, 1.5rem);     /* 21px → 24px @ 1440px — a list entry's title (used on /writing); one step above prose so hierarchy isn't carried by weight alone, below h2 so entries don't read as section headings */
+  --text-h2: clamp(1.625rem, 1.581rem + 0.188vw, 1.75rem);              /* 26px → 28px @ 1440px */
+  --text-title: clamp(2.25rem, 1.854rem + 1.690vw, 3.375rem);           /* 36px → 54px @ 1440px — article h1 */
+  --text-listing-title: clamp(3rem, 2.648rem + 1.502vw, 4rem);          /* 48px → 64px @ 1440px — listing page h1; min lowered from 60px so index titles stop outshouting 36px article headlines on phones */
+
+  --leading-prose: 1.6;
+  --leading-heading: 1.15;
+  --leading-label: 1.4;
+}
+
+/* Step 3: P3 wide-gamut upgrade for accent ONLY (destructive aliases accent) */
+/* Neutrals stay sRGB — chroma delta is imperceptible at those lightness values */
+@supports (color: color(display-p3 0 0 0)) {
+  :root,
+  .light {
+    --color-accent: oklch(0.51 0.30 27);
+  }
+  .dark {
+    --color-accent: oklch(0.65 0.24 27);
+  }
+}
+
+/* Hero fluid font — re-anchored to the shared 375→1440 track (was a lone 4vw clamp that left
+   the landing statement smaller than the listing titles at every width below ~1600px). Now
+   36 → 64px: the home statement is the largest voice on the site at all widths. */
+:root {
+  --hero-text: clamp(2.25rem, 1.634rem + 2.629vw, 4rem);
+
+  /* Optical letter-spacing — tracking tightens as the rendered size grows.
+     Linear in size, anchored -0.02em @ 36px → -0.04em @ 64px:
+     tracking(px) = size × -0.0657 + 1.646. Keyed to each token's live
+     (fluid) size, so a heading tracks correctly for its actual size. */
+  --tracking-hero: calc(var(--hero-text) * -0.0657 + 1.646px);
+  --tracking-title: calc(var(--text-title) * -0.0657 + 1.646px);
+  --tracking-listing-title: calc(var(--text-listing-title) * -0.0657 + 1.646px);
+}
+
+
+/* Easing tokens — consumed by motion/react animations and CSS transitions */
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    /* Unbreakable tokens (long URLs, compound words, scraped titles) wrap instead of
+       escaping their column. Inherited everywhere; only bites when a word would
+       otherwise overflow its line box — found by the /lab/break-* stress harnesses,
+       where every card and list title escaped or clipped on a 70-char token. */
+    overflow-wrap: break-word;
+  }
+  /* Rapid taps on a control (like-button double taps, lightbox arrows) must never
+     trigger iOS double-tap zoom. Element selectors, so a utility class on a custom
+     gesture surface (touch-none on the lightbox swipe layers) still outranks it. */
+  button, a, input, select, textarea, [role='button'] {
+    touch-action: manipulation;
+  }
+  html {
+    /* Explicit background on the ROOT too (not just <body>): iOS 26 Safari derives its translucent
+       toolbar tint from the <html>/<body> background-color, and a transparent root "falls back to
+       white" there (page content then bleeds through the bar). Both must carry the theme color. */
+    @apply bg-background font-sans;
+    /* color-scheme is owned HERE, not by next-themes' inline style (enableColorScheme is off):
+       during the theme wipe, ThemeToggle pins the OLD scheme as an inline style so the native
+       scrollbar doesn't snap to the new theme ahead of the circle — it flips when the wipe ends. */
+    color-scheme: light;
+    scrollbar-gutter: stable;
+    /* Grayscale antialiasing (no subpixel) — how macOS renders dark-UI text everywhere.
+       Geist reads a touch lighter this way; intentional (make-interfaces-feel-better). */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  strong, b {
+    font-weight: 600;
+  }
+  /* Derived from the accent token, not restated: the old hardcoded oklch values were the
+     accent's P3 numbers copied out by hand, which would silently drift the day the accent
+     moves. One anchor, everything mixed or referenced from it (Marcin's two-anchor rule). */
+  ::selection {
+    background-color: var(--color-accent-fill);
+    color: oklch(1 0 0);
+  }
+  .dark ::selection {
+    color: oklch(0.98 0.005 240);
+  }
+}
+
+/* TAP PRESS — the press state for touch, where a hover state cannot do the job.
+   The header controls already carried `active:` rules, and those were firing correctly. The problem
+   is that they inherit the HOVER transition: 150ms to 70% opacity. A tap lasts 60-100ms, so the fade
+   has barely begun when the finger lifts and it eases straight back — the control reads as dead.
+   A press must land INSTANTLY (no transition) and go further than a hover does: a pointer lingers
+   and can afford subtlety, a finger cannot, and it is covering the very thing it pressed.
+   Unlayered, so it wins over the Tailwind utilities in @layer without needing !important. */
+@media (hover: none) {
+  .tap-press:active { opacity: 0.5; transition: none; }
+}
+
+/* Grid column placements — single source of truth for the 12-column layout.
+   Plain CSS (not @apply) so the responsive rules generate reliably under
+   Turbopack. Consumed via class name in pages/components and via the
+   TEXT/MEDIA/PORTRAIT constants in mdx-components.tsx.
+   Breakpoints match Tailwind: md 56.25rem (custom), lg 64rem, xl 80rem, 2xl 96rem. */
+.col-content,
+.col-prose,
+.col-media,
+.col-portrait { grid-column: 1 / -1; }
+
+@media (min-width: 56.25rem) { /* md — 900px */
+  .col-content  { grid-column: 4 / span 6; }
+  .col-prose,
+  .col-media,
+  .col-portrait { grid-column: 2 / span 10; }
+}
+@media (min-width: 64rem) { /* lg */
+  .col-prose,
+  .col-media    { grid-column: 3 / span 8; }
+  .col-portrait { grid-column: 4 / span 6; }
+}
+@media (min-width: 80rem) { /* xl */
+  .col-prose,
+  .col-media    { grid-column: 4 / span 6; }
+  .col-portrait { grid-column: 5 / span 4; }
+}
+
+/* Articles with a sidebar TOC (.has-toc on the article grid): the prose column
+   never widens into the TOC's columns as the viewport narrows. The TOC keeps
+   three columns below xl so its lines don't wrap badly, and survives down to
+   md — only phone-like widths fall back to the floating Contents pill. */
+@media (min-width: 56.25rem) { /* md */
+  .has-toc .col-prose,
+  .has-toc .col-media    { grid-column: 2 / span 7; }
+  .has-toc .col-portrait { grid-column: 3 / span 5; }
+}
+@media (min-width: 64rem) { /* lg */
+  .has-toc .col-prose,
+  .has-toc .col-media    { grid-column: 3 / span 6; }
+  .has-toc .col-portrait { grid-column: 4 / span 4; }
+}
+@media (min-width: 80rem) { /* xl — back to the standard article layout */
+  .has-toc .col-prose,
+  .has-toc .col-media    { grid-column: 4 / span 6; }
+  .has-toc .col-portrait { grid-column: 5 / span 4; }
+}
+/* The editorial narrowing, retuned. The type clamp tops out at 21px @1440, so above
+   that the 6-column measure grows linearly: 71 CPL at 1440, 96 by 1920 (measured with
+   Söhne's real 9.3px average glyph; Geist's average advance runs about 5% wider, 0.533em
+   vs 0.508em, so the same lines land nearer 68 and 91 CPL and the breakpoint below still
+   holds). Prose steps to 4 columns at 120rem — the width
+   where 4-of-12 first REACHES the ~64 CPL ideal (at the old 100rem line it was a
+   53-CPL strip, rejected at 1618px). The `.has-toc` selector rides inside the block
+   this time: the first version narrowed only rail-less pages because
+   `.has-toc .col-prose` outranked it, and wide monitors showed two prose measures
+   on sibling pages (caught in prod 2026-08-26). */
+@media (min-width: 120rem) { /* 1920px */
+  .col-content,
+  .col-prose,
+  .has-toc .col-prose { grid-column: 5 / span 4; }
+}
+
+/* HEADER COLLAPSE — the full flex header (.header-full) shows whenever the measured
+   layout fits AT LEAST two nav links plus the More overflow menu; site-header.tsx
+   computes how many links stay visible (the rest move into "More") and stamps data-nav
+   on the <header>: 'full', 'collapsed', or 'auto' (the pre-measure SSR state,
+   approximated with a 70rem cut). While collapsed, the full layout stays laid out —
+   invisible, absolute, unfocusable — so every resize can re-measure whether it fits again.
+   The elements keep their Tailwind breakpoint classes (hidden sm:flex wide:hidden /
+   sm:hidden) as the static base — sm (40rem), not md: the More menu degrades the row
+   gracefully down to phone widths, so the hamburger bar only owns true phone sizes.
+   The rules here are unlayered, so they win over those layered utilities when a
+   data-nav verdict is in — and if this block ever fails to load, the markup degrades
+   to plain breakpoint behavior instead of showing two headers. */
+@media (min-width: 32rem) {
+  header[data-nav='collapsed'] .header-full,
+  header[data-nav='auto'] .header-full {
+    visibility: hidden;
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    pointer-events: none;
+  }
+  header[data-nav='collapsed'] .header-bar { display: flex; }
+}
+@media (min-width: 32rem) and (max-width: 69.9375rem) {
+  header[data-nav='auto'] .header-bar { display: flex; }
+}
+@media (min-width: 70rem) {
+  header[data-nav='auto'] .header-full { visibility: visible; position: static; pointer-events: auto; }
+}
+@media (min-width: 108rem) {
+  /* the spread 12-col grid takes over; wide:hidden/md:hidden already hide both layouts —
+     this guards a stale 'collapsed' stamp from resurrecting the bar */
+  header[data-nav] .header-bar { display: none; }
+}
+
+/* Gallery items (/books, /podcasts): a repeating item-plus-empty rhythm on the
+   full 12-column grid. At xl each item takes 3 columns with the 4th left empty,
+   three per row (starts 1 / 5 / 9). Between md and xl the rhythm relaxes to
+   5 + 1 for two per row; below md items run single-file and full-width.
+   Consumed inside a full-width nested grid (grid-cols-12 gap-x-6) whose only
+   children are items, so nth-child never counts the page header. Explicit
+   `start / span` pairs, not `span` + a start override: `grid-column: span N`
+   puts the span on grid-column-START, so a later grid-column-start would
+   silently erase it. */
+.col-gallery-item { grid-column: 1 / -1; }
+@media (min-width: 56.25rem) { /* md — two per row */
+  .col-gallery-item:nth-child(2n + 1) { grid-column: 1 / span 5; }
+  .col-gallery-item:nth-child(2n)     { grid-column: 7 / span 5; }
+}
+@media (min-width: 80rem) { /* xl — three per row */
+  .col-gallery-item:nth-child(3n + 1) { grid-column: 1 / span 3; }
+  .col-gallery-item:nth-child(3n + 2) { grid-column: 5 / span 3; }
+  .col-gallery-item:nth-child(3n)     { grid-column: 9 / span 3; }
+}
+
+/* Geist Mono's space glyph is a full mono cell (0.6em — measured 9.6px at 16px, vs the
+   sans Geist's 0.25em; Söhne, the face this was tuned on, sat at 0.6em / 0.21em), so
+   multi-word mono UI copy (dates, EXIF, spec readouts) reads with gigantic word gaps.
+   Negative word-spacing narrows ONLY the space glyph's advance:
+   -0.3em brings it to 0.3em, still a touch wider than the sans space so it keeps a mono
+   flavor. Scoped to the .font-mono class ONLY — inline <code> in articles carries it
+   via the mdx-components `code` mapping — with a reset for BLOCK code: inside <pre> a
+   space MUST stay exactly one cell wide or column alignment breaks. Apply-then-reset
+   rather than one :not() with complex selectors, which the CSS pipeline drops silently.
+   Unlayered so they win over the layered font-mono utility. */
+.font-mono {
+  word-spacing: -0.3em;
+}
+pre,
+pre code,
+pre .font-mono {
+  word-spacing: 0;
+}
+
+/* Typographic recipes — single source of truth for the most-repeated patterns.
+   In @layer components (not unlayered) so Tailwind utilities still override,
+   e.g. the eyebrow variant that adds `uppercase text-[11px]`. */
+@layer components {
+  .page-title {
+    font-family: var(--font-sans);
+    font-weight: 400;
+    font-size: var(--text-listing-title);
+    line-height: 1;
+    letter-spacing: var(--tracking-listing-title);
+    color: var(--color-fg);
+  }
+  .section-label {
+    font-family: var(--font-sans);
+    font-size: var(--text-label);
+    line-height: var(--leading-label);
+    color: var(--color-muted);
+  }
+  /* Section heading — one recipe so pages stop restating (and reordering) it. Margins
+     stay per-page. */
+  .section-title {
+    font-family: var(--font-sans);
+    font-weight: 500;
+    font-size: var(--text-h2);
+    line-height: var(--leading-heading);
+    letter-spacing: -0.02em;
+    color: var(--color-fg);
+  }
+  /* Subtle neutral edge so near-white / near-black photos don't merge with the page.
+     An outline (not a border): zero layout impact; offset -1px keeps it on the image. */
+  .img-outline {
+    outline: 1px solid rgb(0 0 0 / 0.1);
+    outline-offset: -1px;
+  }
+  .dark .img-outline {
+    outline-color: rgb(255 255 255 / 0.1);
+  }
+}
+
+/* Homepage hero reveal — pure CSS so it runs from first paint. (The previous motion/client
+   version held the hero text, the page's LCP element, invisible until hydration.) Per-word
+   delays are inline animation-delays; `both` keeps the pre-delay state hidden. */
+@keyframes hero-word {
+  from { opacity: 0; transform: translateY(0.35em); filter: blur(8px); }
+  to   { opacity: 1; transform: translateY(0);      filter: blur(0);   }
+}
+/* Desktop-only: the hero paragraph is the mobile LCP element, and the reveal's final
+   paint (41-word stagger + the punchline's 0.7s beat) read as a 2.5s render delay to
+   Lighthouse — the whole mobile score drop. Phones get the text instantly; the full
+   choreography plays from md up. Reduced motion still wins everywhere. */
+@media (min-width: 56.25rem) { /* the site's md breakpoint */
+  .hero-word {
+    animation: hero-word 0.62s cubic-bezier(0.23, 1, 0.32, 1) both;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-word { animation: none; }
+}
+
+/* GitHub contribution calendar cells (github-calendar.tsx). Geometry + level fills live
+   here so each of the ~365 <rect>s ships only x/y + a class — that alone halves the /about
+   page's HTML + RSC flight weight. SVG geometry properties in CSS are SVG2 (fine per the
+   site's browser floor). */
+.contrib-cal rect {
+  width: 10px;
+  height: 10px;
+  rx: 2px;
+}
+.contrib-cal .c0 { fill: var(--contrib-l0); }
+.contrib-cal .c1 { fill: var(--contrib-l1); }
+.contrib-cal .c2 { fill: var(--contrib-l2); }
+.contrib-cal .c3 { fill: var(--contrib-l3); }
+.contrib-cal .c4 { fill: var(--contrib-l4); }
+
+/* Loading shimmer — a soft placeholder tint + translucent sweep shown BEHIND an image
+   or video while it loads (see AutoplayVideo, ImgModal, the lightbox). Sitting behind the
+   media (not fading out on top of it) is what removes the swap "flash": the media is
+   opaque, so it simply covers the shimmer as it paints — no cross-fade brightness jump.
+   Transform-based so many instances stay cheap. */
+.shimmer {
+  background-color: color-mix(in srgb, var(--color-fg) 4%, transparent);
+  overflow: hidden;
+}
+.shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    color-mix(in srgb, var(--color-fg) 10%, transparent) 50%,
+    transparent 70%
+  );
+  transform: translateX(-100%);
+  animation: shimmer-sweep 1.6s ease-in-out infinite;
+}
+@keyframes shimmer-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shimmer::after {
+    animation: none;
+  }
+}
+
+/* content-visibility: skip the layout + paint of off-screen items until they're scrolled near,
+   cutting initial render cost and improving INP on long lists (the /photos grid). next/image
+   already lazy-LOADS off-screen images; this additionally skips their RENDER. contain-intrinsic-size
+   with the `auto` keyword lets the browser remember each item's real height after it has been
+   rendered once, so the scrollbar settles and the grid's variable aspect ratios never need a
+   hardcoded size — the 320px fallback is only used before an item's first paint. */
+.cv-auto {
+  content-visibility: auto;
+  /* Remember HEIGHT only. Remembering width too (`contain-intrinsic-size: auto ...`)
+     poisoned rotation on iOS: skipped items kept their landscape width as min-content,
+     holding the portrait column wider than the viewport. Width is w-full-driven and
+     needs no memory. */
+  contain-intrinsic-width: none;
+  contain-intrinsic-height: auto 320px;
+}
+
+/* Row-scale variant for long uniform text lists (/archive rows):
+   same height-only memory as .cv-auto, sized to a single line so offscreen rows are
+   skipped without inflating the scrollbar before their first paint. */
+.cv-auto-row {
+  content-visibility: auto;
+  contain-intrinsic-width: none;
+  contain-intrinsic-height: auto 3rem;
+}
+
+/* Copy-code chip — the code well's own token nudged toward foreground so the button
+   reads as a control against the code instead of floating invisibly (2026-08-25).
+   Light nudges 6% (12% hover); dark nudges far less because near-white foreground moves
+   perceived lightness much harder against the dark well — the goal is the same VISUAL
+   step in both themes, not the same number. Single source here, not utility classes:
+   per-theme color-mix pairs belong with the other recipes. */
+.copy-code-chip {
+  background-color: color-mix(in oklab, var(--color-surface-subtle) 94%, var(--color-foreground));
+}
+.copy-code-chip:hover {
+  background-color: color-mix(in oklab, var(--color-surface-subtle) 88%, var(--color-foreground));
+}
+.dark .copy-code-chip {
+  background-color: color-mix(in oklab, var(--color-surface-subtle) 97%, var(--color-foreground));
+}
+.dark .copy-code-chip:hover {
+  background-color: color-mix(in oklab, var(--color-surface-subtle) 94%, var(--color-foreground));
+}
+
+/* Caption normalization — MDX wraps a component's multi-line caption (e.g. a GifVideo
+   figcaption that contains a link) in a <p>, which the global paragraph mapping then
+   styles as full-size body prose (foreground color, 40px margin). Reset any paragraph
+   inside a figcaption so captions keep the small, muted section-label look no matter
+   how the author wrote them. Applies to every article and case study. */
+figcaption > p {
+  margin: 0;
+  font-size: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  text-align: inherit;
+}
+
+/* Content links — accent-colored underline only on prose inline links, not nav/TOC/footer */
+/* Accent links — single source of truth. The global prose selector auto-styles
+   inline links inside article copy; the .accent-link class is for the same
+   treatment on links outside prose (cards, calendars, teasers). */
+.accent-link,
+.product-card-body a, /* card note bodies — MDX children can be bare inline content (no <p>), which the prose selector below misses */
+main :is(p, li, blockquote, td, figcaption) a:not(nav a):not(footer a) {
+  color: var(--color-accent);
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in oklch, var(--color-accent) 30%, transparent);
+  /* NOT from-font. Tried: `text-underline-position/thickness: from-font` per the research —
+     with Söhne (the face at the time) the underline visibly wobbled against the hover repaint,
+     and a rule that moves is worse than a rule we placed. The hand-tuned offset stays and was
+     not re-tuned for Geist; skip-ink (kept) is the part of the recommendation that survives
+     contact with a real font. */
+  text-underline-offset: 3px;
+  text-decoration-skip-ink: auto;
+}
+.accent-link { transition: text-decoration-color 150ms; }
+
+/* Visited links, brought back (Marcin). A read essay drops from accent to text color with a
+   faint underline — wayfinding almost every modern site abandoned, and a real reader service
+   on a page of many outbound links. Scoped to PROSE links only: .accent-link is used on cards
+   and calendars, where a "read" state would look like a disabled one. :visited legally allows
+   only color/decoration changes, which is exactly what this is. */
+main :is(p, li, blockquote, td, figcaption) a:not(nav a):not(footer a):visited {
+  color: var(--color-fg);
+  text-decoration-color: color-mix(in oklab, var(--color-fg) 22%, transparent);
+}
+.accent-link:hover,
+.product-card-body a:hover,
+main :is(p, li, blockquote, td, figcaption) a:not(nav a):not(footer a):hover {
+  text-decoration-color: var(--color-accent);
+}
+/* Internal-link chip. EVERY prose link to THIS site's own content sits on a faint
+   accent tint, so a reader can tell "more of this site" from an outbound link at a
+   glance. Matched by href^="/" (a compile-time stylesheet cannot read site.config.ts
+   to match the domain; src/lib/remark/remark-self-links.mjs rewrites the site's own
+   absolute URLs to relative ones so they qualify). Only explicit link-style utilities
+   opt out: .media-link (own-site file targets, e.g. a video), .link-subtle,
+   .accent-link, .link-accent-hover (index rows on the home page), and .plain-link
+   (a pure intent marker for list/nav links, e.g. Related posts); incidental
+   classes do NOT suppress the treatment (that heuristic twice broke intent).
+   Eyebrow/breadcrumb rows (p.section-label) and anything in a footer (icon rows
+   render in an li inside main) are navigation, not prose, and are excluded. Text drops
+   to foreground (the tint carries the interactivity), and the tint is stronger in dark
+   where a 9% wash disappears. */
+main :is(p:not(.section-label), li, blockquote) a[href^="/"]:not(.media-link, .link-subtle, .accent-link, .link-accent-hover, .plain-link, footer *) {
+  color: var(--color-fg);
+  background-color: color-mix(in oklab, var(--color-accent) 9%, transparent);
+  /* The chip moves to the next line as a unit: a tint split across two lines reads as two
+     links. clone stays as a fallback for text with forced breaks. */
+  white-space: nowrap;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  /* Top padding runs 1px tighter than bottom — at prose size the tint read one
+     pixel too tall above the cap height (2026-08-15). */
+  padding-top: calc(0.1em - 1px);
+  padding-bottom: 0.1em;
+  padding-left: 0.2em;
+  padding-right: 0.2em;
+  transition: background-color 150ms, color 150ms;
+}
+/* Hover: the ink and the wash trade places — text turns accent, the tint drops away.
+   Measured (2026-08-13, WCAG relative luminance on the composited chip): accent text on
+   the tinted chip is 4.33:1 light / 4.01:1 dark at rest and worse on a strengthened
+   tint, all under AA's 4.5:1 for body text; on the plain page it's 5.0:1 light /
+   5.14:1 dark, which passes. So red text and the tint may not coexist — the swap keeps
+   the state change loud AND accessible. :active mirrors :hover for touch. */
+main :is(p:not(.section-label), li, blockquote) a[href^="/"]:not(.media-link, .link-subtle, .accent-link, .link-accent-hover, .plain-link, footer *):hover,
+main :is(p:not(.section-label), li, blockquote) a[href^="/"]:not(.media-link, .link-subtle, .accent-link, .link-accent-hover, .plain-link, footer *):active {
+  color: var(--color-accent);
+  background-color: transparent;
+}
+html.dark main :is(p:not(.section-label), li, blockquote) a[href^="/"]:not(.media-link, .link-subtle, .accent-link, .link-accent-hover, .plain-link, footer *) {
+  background-color: color-mix(in oklab, var(--color-accent) 22%, transparent);
+}
+html.dark main :is(p:not(.section-label), li, blockquote) a[href^="/"]:not(.media-link, .link-subtle, .accent-link, .link-accent-hover, .plain-link, footer *):hover,
+html.dark main :is(p:not(.section-label), li, blockquote) a[href^="/"]:not(.media-link, .link-subtle, .accent-link, .link-accent-hover, .plain-link, footer *):active {
+  color: var(--color-accent);
+  background-color: transparent;
+}
+/* On phone widths the chip-as-unit rule inverts: a long self-link (the tool-chaining
+   list on the vibecoded study) can exceed the viewport, un-wrappable, and drags the
+   whole page into horizontal scroll (2026-08-28). Below 40rem the links wrap
+   and box-decoration-break: clone carries the chip across fragments — the fallback
+   the nowrap comment above already documents. */
+@media (max-width: 40rem) {
+  main :is(p:not(.section-label), li, blockquote) a[href^="/"]:not(.media-link, .link-subtle, .accent-link, .link-accent-hover, .plain-link, footer *) {
+    white-space: normal;
+    /* slice, not clone: clone repeated the mark on every wrapped fragment — the
+       mark belongs to the link, not to each of its lines (2026-08-28).
+       Slice lays the chip out unbroken and cuts it, so the mark and left pad
+       appear once, on the first line. */
+    -webkit-box-decoration-break: slice;
+    box-decoration-break: slice;
+  }
+}
+
+/* SCROLL HINT — for horizontally scrollable regions (wide diagrams on phones).
+   The classic scrolling-shadows recipe: two page-colored covers scroll WITH the
+   content (background-attachment: local) while two soft shadows stay pinned to the
+   container edges; at either end the cover slides over its shadow and hides it, so
+   a shadow shows exactly when there is more content in that direction (the ask was
+   a "you can scroll this" indicator, 2026-08-28). Diffuse shadow, no border,
+   per the house rule; needs the container's own bg to match --color-bg. */
+.scroll-x-hint {
+  overflow-x: auto;
+  background:
+    linear-gradient(to right, var(--color-bg) 35%, transparent) left / 48px 100%,
+    linear-gradient(to left, var(--color-bg) 35%, transparent) right / 48px 100%,
+    radial-gradient(farthest-side at 0 50%, color-mix(in oklab, var(--color-fg) 16%, transparent), transparent) left / 16px 100%,
+    radial-gradient(farthest-side at 100% 50%, color-mix(in oklab, var(--color-fg) 16%, transparent), transparent) right / 16px 100%;
+  background-repeat: no-repeat;
+  background-attachment: local, local, scroll, scroll;
+}
+
+/* Dash lists — the "— " marker, drawn as a positioned ::before instead of ::marker so
+   the dash's LEFT edge sits exactly on the content column edge. Real ::marker boxes
+   right-align to the text indent, so their left edge drifts with the marker string's
+   width: a few px outside the column on some pages, a few px inside on others. */
+.list-dash {
+  list-style: none;
+  padding-left: 1.25em;
+}
+.list-dash > li {
+  position: relative;
+}
+.list-dash > li::before {
+  content: '—';
+  position: absolute;
+  left: -1.25em;
+}
+
+/* Hover-to-accent — link stays its base color, turns accent on hover.
+   :active mirrors :hover so the same feedback shows on tap (touch devices).
+   NO color transition: with one, WebKit defers the repaint of :visited-affected
+   text by ~500ms on hover (visited-link privacy vs animation), while the
+   untransitioned underline updates instantly — a visibly torn hover on the
+   homepage lists. The snap also matches the underline's timing. */
+.link-accent-hover:hover,
+.link-accent-hover:active { color: var(--color-accent); }
+
+/* Card variant — when the whole card is the anchor, the card
+   carries the group/card marker and hovering ANYWHERE on it accents the title inside,
+   so the hover affordance matches the true hit area. Same no-transition rule. */
+.group\/card:hover .link-accent-hover,
+.group\/card:active .link-accent-hover { color: var(--color-accent); }
+
+/* Keyboard focus — one consistent accent ring for keyboard users across every focusable
+   element (never on mouse click). base-ui Button/Toggle drop their own ring (see those
+   components) so this is the single source of truth and nothing doubles up.
+   tabindex="-1" is excluded: those are programmatic-focus containers (Base UI popups, the
+   lightbox) that Tab can never reach — and Safari matches :focus-visible on them after a
+   right-click, where this rule's box-shadow also OVERRODE .shadow-command and stripped the
+   mark menu's shadow until hover moved focus. Menu items are excluded too: Safari treats
+   their hover/roving focus as :focus-visible (Chrome doesn't), and their highlighted
+   surface bg IS the focus indication — arrow keys and hover light the same state, so a
+   ring would double up. */
+:is(a, button, summary, [role="button"], [tabindex]:not([tabindex="-1"])):focus-visible:not([role^="menuitem"]) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+  /* Soft accent halo on top of the outline so keyboard focus is unmissable. The outline
+     (not the shadow) is the reliable part — it's never clipped by overflow ancestors. */
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--color-accent) 22%, transparent);
+}
+
+/* Text inputs opt in via `.accent-focus-ring` — a much softer accent focus than the bold
+   ring above. An input is a large surface you look at while typing, so a solid outline is
+   too loud: just a gently warmed border and a faint halo, no hard outline. */
+.accent-focus-ring:focus-visible {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-accent) 12%, transparent);
+}
+
+/* Sonner toast theming (the `.cn-toast` hook is set in ui/sonner.tsx). The newsletter signup is
+   the only toast today; its action button ("Email") uses our primary red to match site buttons.
+   Use --color-accent (a real runtime var) not --color-primary (a build-only @theme inline token
+   that never reaches :root, so var() would drop the rule). !important beats sonner's own
+   action-button colors, which it injects at runtime after globals. */
+.cn-toast [data-button] {
+  background: var(--color-accent-fill) !important;
+  color: oklch(0.98 0.005 240) !important;
+  border-color: transparent !important;
+}
+/* Same hover step as Button's primary variant — mixed into the color rather than a
+   brightness() filter, which promoted the layer and made the label's glyphs shift. */
+.cn-toast [data-button]:hover {
+  background: color-mix(in oklab, var(--color-accent-fill) 90%, black) !important;
+}
+
+/* Optical line-breaking — cheap, global wins applied to every page. `balance` evens out
+   short heading lines (no lonely last word); `pretty` prevents orphans/widows in running
+   text; `hanging-punctuation` pulls opening quotes/bullets into the margin so prose has a
+   true optical left edge (progressive enhancement — Safari today, harmless elsewhere). */
+main :is(h1, h2, h3), .page-title {
+  text-wrap: balance;
+}
+main :is(p, li, blockquote, figcaption) {
+  text-wrap: pretty;
+}
+body {
+  hanging-punctuation: first;
+}
+/* …but not inside list items: a quote opening an li would outdent into the bullet's gutter,
+   where there is no margin to hang into (Marcin ships exactly this exception). */
+li {
+  hanging-punctuation: none;
+}
+/* Code must keep an exact left edge: a JSON block whose first line opens with a
+   quote would otherwise hang it in Safari. */
+:is(pre, code) {
+  hanging-punctuation: none;
+}
+/* Chrome and Firefox do not support hanging-punctuation, so prose blocks that open
+   with a curly quote get a measured first-line pull instead. The values are the
+   glyph advance widths in Geist (0.37em for a double quote, 0.20em for a single, read
+   from the font's hmtx table; Söhne measured 0.37em / 0.19em), applied by the MDX
+   paragraph component. Remeasure these when the typeface changes. Safari's native
+   hanging supersedes it. */
+.hang-dq {
+  text-indent: -0.37em;
+}
+.hang-sq {
+  text-indent: -0.2em;
+}
+@supports (hanging-punctuation: first) {
+  .hang-dq,
+  .hang-sq {
+    text-indent: 0;
+  }
+}
+
+/* Layered elevation for the floating command palette — soft, realistic depth (à la Josh
+   Comeau / Tobias Ahlin) in place of a hard 1px border. There is NO backdrop dim, so this
+   shadow does all the separating on its own: a tight edge layer to draw the boundary
+   against a full-brightness page, then progressively larger, softer layers for the
+   elevation read. */
+/* NO RING LAYERS. Any 0-offset 0-blur 1px shadow is perceptually a border, whatever it is
+   technically — three attempts confirmed it. Light mode separates on diffuse shadow alone
+   (paper over paper, all edges soft); dark mode separates on the PLANE, not an edge: the
+   palette surface is a step lighter than the page (see CommandPalette), the way an elevated
+   dark-mode material actually reads, with soft black depth underneath. */
+.shadow-command {
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.05),
+    0 4px 10px rgba(0, 0, 0, 0.07),
+    0 16px 36px rgba(0, 0, 0, 0.13),
+    0 40px 100px rgba(0, 0, 0, 0.30);
+}
+html.dark .shadow-command {
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.45),
+    0 16px 40px rgba(0, 0, 0, 0.60),
+    0 48px 120px rgba(0, 0, 0, 0.85);
+}
+
+/* Card-scale elevation — shadow-command's little sibling (the beautiful-shadows trial,
+   2026-08-24: /lab/shadows-applied). Six gentle 6% layers, each doubling in throw; the
+   source recipe's 0-offset 1px ring layer is DELETED per the no-rings doctrine above.
+   For cards, tooltips, and small panels where shadow-command reads palette-heavy.
+   @utility (not a plain class) so variants compose: hover:shadow-card etc.
+   Dark mode: the plane does the separating — pair `dark:shadow-card-dark` with a
+   surface-step background (dark:bg surface), same doctrine as the palette. */
+@utility shadow-card {
+  box-shadow:
+    0 1px 1px -0.5px rgba(0, 0, 0, 0.06),
+    0 3px 3px -1.5px rgba(0, 0, 0, 0.06),
+    0 6px 6px -3px rgba(0, 0, 0, 0.06),
+    0 12px 12px -6px rgba(0, 0, 0, 0.06),
+    0 24px 24px -12px rgba(0, 0, 0, 0.06);
+}
+@utility shadow-card-dark {
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.45),
+    0 12px 28px rgba(0, 0, 0, 0.55);
+}
+
+/* Hero-media elevation — the smooth-shadow ramp (same family the palette recipe cites)
+   at full strength, for window screenshots and hero media only. Two forms:
+   shadow-hero draws a box-shadow (rectangular media); .shadow-hero-media is the
+   drop-shadow FILTER chain for images with alpha (follows rounded window corners
+   instead of boxing them). translateZ(0) forces a compositing layer: WebKit otherwise
+   paints an image that finishes loading after first paint without re-evaluating its
+   filter, so Safari showed the lazy intake hero shadowless until a cached reload. */
+@utility shadow-hero {
+  box-shadow:
+    0 2.8px 2.2px rgba(0, 0, 0, 0.034),
+    0 6.7px 5.3px rgba(0, 0, 0, 0.048),
+    0 12.5px 10px rgba(0, 0, 0, 0.06),
+    0 22.3px 17.9px rgba(0, 0, 0, 0.072),
+    0 41.8px 33.4px rgba(0, 0, 0, 0.086),
+    0 100px 80px rgba(0, 0, 0, 0.12);
+}
+.shadow-hero-media {
+  filter:
+    drop-shadow(0 2.8px 2.2px rgba(0, 0, 0, 0.034))
+    drop-shadow(0 6.7px 5.3px rgba(0, 0, 0, 0.048))
+    drop-shadow(0 12.5px 10px rgba(0, 0, 0, 0.06))
+    drop-shadow(0 22.3px 17.9px rgba(0, 0, 0, 0.072))
+    drop-shadow(0 41.8px 33.4px rgba(0, 0, 0, 0.086));
+  transform: translateZ(0);
+}
+
+/* Window-capture framing — the QUIET two-layer drop-shadow app-window screenshots
+   wear in prose/hero seats (the pick, 2026-08-25, over both the shadow-hero ramp
+   and a border; ~half the weight of the pre-trial recipe). drop-shadow follows the
+   capture's rounded-corner alpha; translateZ(0) is the WebKit late-load filter fix
+   (see .shadow-hero-media). Used by the /intake heroes and the /quicktake hero. */
+.shadow-window {
+  filter:
+    drop-shadow(0 8px 18px rgba(0, 0, 0, 0.07))
+    drop-shadow(0 1px 3px rgba(0, 0, 0, 0.04));
+  transform: translateZ(0);
+}
+
+/* Theme switch — reveal the new theme with a circular clip growing from the toggle
+   (see ThemeToggle). Class-gated so page-nav view transitions are untouched; the default
+   root cross-fade is suppressed so only the clip animates. */
+html.theme-vt::view-transition-old(root),
+html.theme-vt::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+html.theme-vt::view-transition-old(root) { z-index: 0; }
+html.theme-vt::view-transition-new(root) { z-index: 1; }
+
+/* Overlay "Download on Unsplash" link — same rest/hover underline treatment as the
+   accent links, but keyed to the adaptive text color (currentColor) over the photo. */
+.unsplash-link {
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 150ms;
+}
+.unsplash-link:hover { text-decoration-color: currentColor; }
+/* On the lightbox's dark glass card the 40% underline mix disappears into the photo —
+   links there run a stronger mix so the underline actually reads. */
+.unsplash-link-glass { text-decoration-color: color-mix(in srgb, currentColor 70%, transparent); }
+
+/* Photos lightbox bottom rail — 8px bottom padding on mobile (never less than the device's
+   safe-area inset), a touch more on desktop. */
+.lightbox-rail-foot {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
+/* Dock entrance. Pure CSS on purpose: a motion-managed transform gets re-applied on
+   every re-render, and any transform/will-change on an ANCESTOR of the glass card
+   makes that ancestor the backdrop root — the card's blur flat-tints (see the card
+   recipe below). The class therefore goes on the dock's CHILDREN (arrows + the card
+   itself), rising in lockstep: an element's OWN transform never breaks its backdrop
+   sampling, so the glass blurs LIVE for the whole ride — plainly visible in
+   shift-click slow-mo, where an ancestor-transform version showed 3.6s of flat tint.
+   All children travel the same fixed distance (the dock's published --dock-h, plus
+   some slack) so they move as one unit; backwards fill holds them below the fold
+   through the delay and evaporates on the last frame. The lightbox removes the class
+   once the entrance ends, so per-photo remounts of the card never replay it. Slow-mo
+   stretches it via --dock-rise-dur/-delay on the dock.
+   The linear() easing is the HOUSE SPRING itself — x(t) for stiffness 620, damping 36,
+   mass 0.7 (src/lib/motion.ts) sampled over 500ms — so the rise is physically identical
+   to the motion entrance it replaces, decel tail and all. The 240ms --ease-spring
+   stand-in reads as an instant pop at this travel; it stays as the fallback for
+   browsers without linear(). */
+@keyframes lightbox-dock-rise {
+  from { transform: translateY(calc(var(--dock-h, 96px) * 1.15)); }
+  to { transform: translateY(0); }
+}
+.lightbox-dock-enter {
+  animation: lightbox-dock-rise var(--dock-rise-dur, var(--duration-spring)) var(--ease-spring) var(--dock-rise-delay, 80ms) backwards;
+  animation: lightbox-dock-rise var(--dock-rise-dur, 500ms) linear(0, 0.1346, 0.3785, 0.6041, 0.7719, 0.8815, 0.9461, 0.9806, 0.9968, 1.0031, 1.0046, 1.004, 1.0029, 1.0019, 1.0011, 1.0006, 1.0003, 1.0001, 1, 1, 1, 1, 1, 1, 1) var(--dock-rise-delay, 80ms) backwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lightbox-dock-enter {
+    animation: none;
+  }
+}
+
+/* Lightbox caption card. Desktop: HIG thin-material-dark (black-tinted blur, boosted
+   saturation, hairline ring) because the photo fills the height and the card sits ON it.
+   CONSTRAINT there: no ancestor of the card may carry opacity < 1 (it becomes the
+   backdrop root and the blur flat-tints); the card fades its OWN opacity only.
+   Mobile: the photo rarely reaches the dock (landscape photo, portrait phone), so the
+   card sits on the plain backdrop — the material comes off and the text speaks in theme
+   ink, editorial-caption style. --cap-fg/--cap-muted flip with the material. */
+.lightbox-caption-card {
+  --cap-fg: var(--color-fg);
+  --cap-muted: var(--color-muted);
+}
+/* Glass only while the card is actually OVER the photo (data-on-photo, set by the
+   lightbox's geometry check). Off the photo — any theme, any size — the base theme-ink
+   treatment above applies, same as mobile. */
+@media (min-width: 640px) {
+  .lightbox-caption-card[data-on-photo] {
+    --cap-fg: rgba(245, 245, 245, 0.95);
+    /* 0.75, up from 0.58: over a BRIGHT photo the glass only darkens the ground to ~L0.8
+       and the 0.58 line measured 2.5:1 — invisible EXIF on beach shots. 0.75 holds 3.4:1
+       worst-case while still reading a step quieter than --cap-fg. */
+    --cap-muted: rgba(245, 245, 245, 0.75);
+    background: rgba(0, 0, 0, 0.42);
+    backdrop-filter: blur(20px) saturate(1.8);
+    -webkit-backdrop-filter: blur(20px) saturate(1.8);
+    box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.15);
+  }
+  /* The chrome buttons (close / prev / next) wear the caption's glass when THEIR
+     geometry says they're over the photo — ink buttons vanished on dark photos
+     (2026-08-26). Same material, circle-sized; the per-button data-on-photo
+     verdict is per-axis (arrows care about photo width, close about height).
+     Unlayered, so these beat the buttons' layered hover:bg-surface utilities. */
+  .lightbox-chrome-btn[data-on-photo] {
+    color: rgba(245, 245, 245, 0.95);
+    background: rgba(0, 0, 0, 0.42);
+    backdrop-filter: blur(20px) saturate(1.8);
+    -webkit-backdrop-filter: blur(20px) saturate(1.8);
+    box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.15);
+  }
+  .lightbox-chrome-btn[data-on-photo]:hover,
+  .lightbox-chrome-btn[data-on-photo]:active {
+    background: rgba(0, 0, 0, 0.58);
+  }
+}
+@media (min-width: 56.25rem) {
+  .lightbox-rail-foot { padding-bottom: 0.75rem; }
+}
+
+/* Hashtag links — same underline pattern as prose links but gray */
+a.hashtag-link {
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in oklch, var(--color-muted) 30%, transparent);
+  text-underline-offset: 3px;
+}
+a.hashtag-link:hover {
+  text-decoration-color: var(--color-muted);
+}
+
+/* Quiet links — plain black/gray text links (not accent-colored). Gain a subtle gray
+   underline on hover and dim to muted (tertiary) on tap/active. Mirrors the accent
+   links' underline math, keyed to muted instead of accent. */
+.link-quiet {
+  text-decoration-line: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+  transition: text-decoration-color 150ms, color 100ms;
+}
+.link-quiet:hover { text-decoration-color: color-mix(in oklch, var(--color-muted) 30%, transparent); }
+.link-quiet:active { color: var(--color-muted); }
+
+/* Subtle links — the single, consistent treatment for quiet utility links (header
+   "last updated", footer version, latest-post links). Muted by default
+   with a faint gray underline always visible; lights up to the full foreground with a
+   stronger underline on hover/tap. */
+/* Utility links — the header's last-updated, back links. FOREGROUND, not
+   muted: these stand alone as actions (nothing around them needs differentiating from), and
+   muted made them read as disabled rather than quiet. The faint underline still marks them
+   as links; hover warms to the accent, which is red doing its one job — interaction. Muted
+   remains for true secondary TEXT, not for things you can click. */
+.link-subtle {
+  color: var(--color-fg);
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in oklch, var(--color-fg) 25%, transparent);
+  text-underline-offset: 3px;
+  transition: color 150ms ease, text-decoration-color 150ms ease;
+}
+/* Hover stays in the link's own color — red on hover next to a grey-black underline read
+   as a different control. The underline darkening is the whole feedback. */
+.link-subtle:hover,
+.link-subtle:active {
+  color: var(--color-fg);
+  text-decoration-color: color-mix(in oklch, var(--color-fg) 60%, transparent);
+}
+
+/* Layered elevation — stacked low-opacity shadows for soft, realistic depth
+   (à la Josh Comeau / Tobias Ahlin) instead of a hard border + single shadow.
+   Dark mode leans on stronger drops plus a hairline top highlight for definition. */
+.shadow-elevated {
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.05),
+    0 3px 8px rgba(0, 0, 0, 0.06),
+    0 8px 20px rgba(0, 0, 0, 0.08);
+}
+html.dark .shadow-elevated {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 2px 6px rgba(0, 0, 0, 0.45),
+    0 10px 28px rgba(0, 0, 0, 0.60);
+}
+.shadow-sheet {
+  box-shadow:
+    0 -1px 2px rgba(0, 0, 0, 0.04),
+    0 -6px 18px rgba(0, 0, 0, 0.07),
+    0 -18px 44px rgba(0, 0, 0, 0.10);
+}
+html.dark .shadow-sheet {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 -8px 26px rgba(0, 0, 0, 0.55);
+}
+
+/* Forced colors (Windows High Contrast) — the mode strips every box-shadow and flattens
+   backgrounds to Canvas, so the two things this design deliberately builds from planes and
+   shadows lose their boundaries entirely: shadow-only floating panels (shadows-not-borders
+   rule) and the soft input focus ring. System-color borders/outlines here only exist in
+   forced-colors; the shadows themselves are untouched everywhere else. */
+@media (forced-colors: active) {
+  .shadow-command,
+  .shadow-elevated,
+  .shadow-sheet {
+    border: 1px solid CanvasText;
+  }
+  .accent-focus-ring:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
+/* The article grid doesn't collapse margins, so every block's bottom margin stacks onto
+   the next block's top margin — doubling the intended gaps (a heading floats too far above
+   its image; text between photos gets more space below than above). Zero the bottom margin
+   of any block immediately before one that carries its own top margin (headings, figures),
+   so a single margin defines each gap — matching the design and centering text between
+   photos. Applies to all posts.
+   .code-block figures are EXCLUDED from the next-element match: they carry no top margin
+   by doctrine (code blocks are not special), so zeroing the preceding margin collapsed
+   the gap to 0 on the package pages — the actual bug behind three rounds of "still too
+   close" (2026-08-31, measured at h2→code 0px vs h2→p 32px). */
+.article-flow > :is(p, ul, ol, blockquote, h2, h3, h4, figure):has(+ :is(h2, h3, h4, figure:not(.code-block))) {
+  margin-bottom: 0;
+}
+
+/* LOOSE MEDIA RHYTHM — a case study is a demo reel: its media blocks ARE the
+   content, and the article default 56px (my-14) reads tight between full-width
+   figures (2026-08-28). Widen the cadence to a symmetric 120px (round
+   three settled it: no reason for asymmetry) on every /designs study — the
+   wrapper carries data-study (round four: all studies, not just the hero-led
+   one) — covering both the my-14 and my-24 wrappers. Three rules keep every gap singular:
+   (1) set the media block's own margins; (2) the block before any media block
+   hands it the whole gap (the shared rule above only knows figures, and several
+   study exhibits wrap in divs); (3) media before a heading/figure/hr keeps
+   handing the gap to the neighbor, preserving the section rhythm above. */
+.article-flow[data-study] > :is(figure, div)[class*="col-"]:is([class*="my-14"], [class*="my-24"]) {
+  margin-block: 7.5rem;
+}
+.article-flow[data-study] > *:has(+ :is(figure, div)[class*="col-"]:is([class*="my-14"], [class*="my-24"])) {
+  margin-bottom: 0;
+}
+.article-flow[data-study] > :is(figure, div)[class*="col-"]:is([class*="my-14"], [class*="my-24"]):has(+ :is(h2, h3, h4, figure, hr)) {
+  margin-bottom: 0;
+}
+
+/* The sketchbook's exhibits are tall interactive plates, and at the page's standard
+   96px the three sections read as one run (2026-08-28). Its h3s are the last
+   ones on the study, so the sibling combinator off the section heading reaches
+   exactly them. The preceding block's bottom margin is already zeroed by the
+   heading-adjacency rule above, so this margin alone owns the gap. */
+.article-flow[data-study] > #the-sketchbook ~ h3 {
+  margin-top: 8rem;
+}
+
+/* Article thematic breaks sit equidistant between paragraphs. Grid items don't
+   collapse margins, so the preceding block's bottom margin — and the following
+   block's top margin (headings carry a large one) — would push the rule off-center.
+   Zero both so the hr's symmetric my-24 alone defines the gap above and below. */
+*:has(+ hr.col-prose) {
+  margin-bottom: 0;
+}
+hr.col-prose + * {
+  margin-top: 0;
+}
+
+/* Optical left rule — for blockquotes and notes. A border-left spans the full line boxes,
+   overshooting the cap height above and the baseline below, and the eye reads the spill as
+   sloppiness it can't name (Marcin). This draws the rule as a positioned pseudo trimmed to
+   the type instead. Width/color are vars so one recipe serves any variant. Default ink is
+   FOREGROUND, not accent: the bar is decoration, and red is reserved for the interactive
+   vocabulary — links, buttons, selected states (same call as the section rule's square). */
+.rule-l {
+  position: relative;
+}
+.rule-l::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.22em;
+  bottom: 0.32em;
+  width: var(--rule-l-width, 3px);
+  background: var(--rule-l-color, var(--color-fg));
+}
+
+/* Section rule — the /lab/section-rules "red node on a rule": a full hairline pinned by a small
+   red square that opens a gap in the line. Replaces the plain thin border between sections. The
+   <hr> stays a real thematic break; ::before draws the line, ::after the node whose background
+   halo interrupts it. Built from tokens (border, accent, bg) so it is correct in light and dark. */
+.section-rule {
+  border: 0;
+  height: 7px;
+  position: relative;
+  overflow: visible;
+}
+.section-rule::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  background: var(--color-border);
+}
+.section-rule::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  transform: translate(-50%, -50%);
+  /* Foreground, not accent: red is reserved for the INTERACTIVE vocabulary — links, buttons,
+     selected states. A decorative punctuation mark wearing the same red diluted what red
+     means everywhere else; in black it keeps the Vignelli gesture and gives red back its job. */
+  background: var(--color-fg);
+  box-shadow: 0 0 0 5px var(--color-bg);
+}
+
+/* Post footer (tags · "chat about this" · related). The grid doesn't collapse margins, so
+   the body's last block — a paragraph carries mb-8/md:mb-10 — would stack onto the first
+   footer block's own top margin, doubling the body→footer gap to ~80px so it read as random.
+   Zero the bottom margin of whatever block immediately precedes a footer block, so each
+   footer block's own top margin alone defines the gap and the closing rhythm stays even. */
+.article-flow > *:has(+ .article-foot-start) {
+  margin-bottom: 0;
+}
+
+/* A bold label paragraph that introduces a list (`**Accountants**` then a list) reads
+   as one unit — the default paragraph margin pushes the list too far below its label.
+   Tighten the gap so the label sits with the list it heads. Scoped to strong-only
+   paragraphs so ordinary sentences that precede a list keep their normal spacing. */
+main p:has(> strong:only-child):has(+ ul),
+main p:has(> strong:only-child):has(+ ol) {
+  margin-bottom: 0.625rem;
+}
+
+/* Opt-in (frontmatter `imageBorders: true`): a hairline around images/videos so
+   white-edged slides and screenshots don't bleed into the page. A single image can
+   opt out with the `noborder` title token; a page without the frontmatter flag can
+   opt a single image IN with the `border` token (see makeMdxImg / img-border classes). */
+.article-image-borders figure :is(img, video),
+figure.img-bordered :is(img, video) {
+  border: 1px solid var(--color-border);
+  border-radius: 2px;
+}
+.article-image-borders figure.img-no-border :is(img, video) {
+  border: 0;
+}
+
+/* Ghost scrollbar for the sticky rails (the article Contents sidebar and the section rail
+   on the settings, design-system, and lab pages): a 2px thumb that is invisible until the
+   rail is hovered, on a transparent track, so a long list scrolls without a grey bar sitting
+   beside the page. The mask fades the list out at its top and bottom edges while it can
+   scroll, the cue the shadcn docs sidebar uses instead of a visible track. */
+.ghost-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.2s;
+  mask-image: linear-gradient(to bottom, transparent, black 1.25rem, black calc(100% - 1.75rem), transparent);
+  padding-top: 1.25rem;
+  padding-bottom: 1.75rem;
+}
+.ghost-scroll:hover {
+  scrollbar-color: color-mix(in srgb, currentColor 18%, transparent) transparent;
+}
+.ghost-scroll::-webkit-scrollbar {
+  width: 2px;
+}
+.ghost-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.ghost-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+  transition: background 0.2s;
+}
+.ghost-scroll:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+/* Article/case-study clips open enlarged in the shared photo lightbox on click — signal
+   it with the same zoom cursor images use. Only media figures match (cards/previews/the
+   store video aren't wrapped in a <figure>), so nothing outside the article is affected.
+   [data-no-lightbox] clips opted out of the lightbox (the mark's click-to-replay), so
+   the zoom cursor would promise an enlargement the click doesn't deliver. */
+figure video:not([data-no-lightbox]) {
+  cursor: zoom-in;
+}
+
+/* Bare <video> tags placed as a DIRECT grid child of the article — track the same
+   responsive band as .col-media (and images/gifs), wider than prose on large screens.
+   Direct-child (`>`) is essential: every component video (Video / PortraitVideo /
+   GifVideo) now renders through AutoplayVideo inside a <figure> that already owns the
+   width, rounding, grid placement, and 56px vertical rhythm. A descendant selector
+   would reach into that figure and stack another 3.5rem onto the inner <video>,
+   inflating its box with dead space above and below. */
+.article-flow > video {
+  display: block;
+  width: 100%;
+  margin-top: 3.5rem;
+  margin-bottom: 3.5rem;
+  border-radius: 0.25rem;
+  grid-column: 1 / -1;
+}
+@media (min-width: 56.25rem) { .article-flow > video { grid-column: 2 / span 10; } } /* md — 900px */
+@media (min-width: 64rem)    { .article-flow > video { grid-column: 3 / span 8; } }  /* lg */
+@media (min-width: 80rem)    { .article-flow > video { grid-column: 4 / span 6; } }  /* xl+ (wider than prose at 2xl) */
+
+/* Photography strip — hide scrollbar, keep scroll behavior */
+.photo-strip::-webkit-scrollbar {
+  display: none;
+}
+
+/* Syntax highlighting — rehype-pretty-code (Shiki dual theme) */
+/* rehype-pretty-code v0.14.x outputs a single <code data-theme="github-light github-dark"> element */
+/* per-token --shiki-light / --shiki-dark CSS vars are injected by Shiki at build time */
+/* Pattern: code[data-theme*=" "] matches any <code> whose data-theme contains a space (dual theme) */
+/* See RESEARCH.md Pattern 2 — corrected from UI-SPEC (avoids Pitfall 2: CSS Custom Property Confusion) */
+/* html.dark is set by next-themes ThemeProvider (already wired in Phase 1); no @media prefers-color-scheme */
+
+/* Light mode default — bind Shiki light theme vars */
+code[data-theme*=" "],
+code[data-theme*=" "] span {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg);
+}
+
+/* Dark mode — next-themes adds .dark class to <html>; bind Shiki dark theme vars */
+html.dark code[data-theme*=" "],
+html.dark code[data-theme*=" "] span {
+  color: var(--shiki-dark);
+  background-color: var(--shiki-dark-bg);
+}
+
+/* Blue tokens read as ink (2026-08-31): min-light paints two blues — #2B5581 on a
+   shell command's arguments (the body of every install command) and #1976D2 on variables,
+   numbers, and CSS property names. Both drop to the foreground ink; red, green, and purple
+   stay. The per-token colors arrive as INLINE --shiki-* custom properties, which a
+   stylesheet can't override, so this overrides `color` instead, keyed on the inline
+   style's light-theme hex (one hex pair identifies the token in both themes). If a Shiki
+   bump reshuffles min-light's palette, these two hexes are the thing to re-check. */
+code[data-theme*=" "] span:is([style*="--shiki-light:#2B5581" i], [style*="--shiki-light:#1976D2" i]),
+html.dark code[data-theme*=" "] span:is([style*="--shiki-light:#2B5581" i], [style*="--shiki-light:#1976D2" i]) {
+  color: var(--color-fg);
+}
+
+/* Fenced code blocks in articles sit in the same gray well as the package pages' Code
+   recipe (surface-subtle, p-5, rounded-lg, label-size mono). Shiki paints its own theme
+   background on the <code> and every token span, which would fill the well white in
+   light mode, so those backgrounds go transparent; token COLORS still apply. */
+/* The figure owns its top gap: the zero-before-figures rule above strips the preceding
+   block's bottom margin (image figures carry my-14; this is the code figure's own). */
+.article-flow figure[data-rehype-pretty-code-figure] {
+  margin-top: 2.5rem;
+}
+
+.article-flow figure[data-rehype-pretty-code-figure] pre {
+  /* background comes from the `main pre` scroll-affordance rule (gray well + shadows) */
+  padding: 1.25rem;
+  font-size: var(--text-label);
+  line-height: 1.6;
+}
+
+.article-flow figure[data-rehype-pretty-code-figure] :is(code, code span) {
+  background-color: transparent;
+}
+
+/* Filename header: a fence written as ```ts title="churn.ts" makes rehype-pretty-code
+   emit a figcaption[data-rehype-pretty-code-title] before the pre. It renders as the
+   well's header band — same gray, hairline under it, mono at label size — and the
+   right padding reserves the corner for the copy button, which the :has() rule below
+   moves up into the band and makes always-visible (a permanent home, so it never
+   floats over code on titled blocks; untitled blocks keep the 2026-08-25 hover chip). */
+.article-flow figure[data-rehype-pretty-code-figure] figcaption[data-rehype-pretty-code-title],
+.code-block figcaption[data-code-title] {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 3rem 0 1.25rem;
+  background-color: var(--color-surface-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  color: var(--color-muted);
+}
+.article-flow figure[data-rehype-pretty-code-figure]:has(figcaption[data-rehype-pretty-code-title]) .copy-code-chip,
+.code-block:has(figcaption[data-code-title]) .copy-code-chip {
+  /* uniform 6px air on every side of the size-8 chip inside the 44px band */
+  top: 6px;
+  right: 6px;
+  opacity: 1;
+}
+
+/* The shared CodeBlock (src/components/ui/code-block.tsx) — bespoke pages' code in the
+   same well the article pre wears; token colors come from the global dual-theme binding. */
+.code-block pre {
+  background-color: var(--color-surface-subtle);
+  padding: 1.25rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  line-height: 1.6;
+  color: var(--color-foreground);
+}
+.code-block :is(code, code span) {
+  background-color: transparent;
+}
+/* NO bespoke spacing: code blocks are not special (2026-08-31). They take the
+   standard rhythm from the preceding element's own margin, exactly like a paragraph
+   would — do not reintroduce heading- or paragraph-adjacent margin rules here. */
+/* Line numbers for the shared CodeBlock: the gutter is a REAL column OUTSIDE the
+   scrolling pre (sticky/absolute pseudo gutters both failed against horizontal scroll —
+   riding away or leaking scrolled glyphs; screenshots, 2026-08-31). The row is a
+   flex pair on the shared well: fixed number rail, then the pre scrolling beside it.
+   Same font metrics as the code keep the rails in register. */
+.code-block .code-gutter-row {
+  display: flex;
+  background-color: var(--color-surface-subtle);
+}
+.code-block .code-gutter {
+  flex-shrink: 0;
+  user-select: none;
+  padding: 1.25rem 0 1.25rem 1.25rem;
+  width: 3.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  line-height: 1.6;
+  color: color-mix(in oklab, var(--color-muted) 60%, transparent);
+}
+.code-block .code-gutter > span {
+  display: block;
+}
+.code-block .code-gutter-row > pre {
+  flex: 1;
+  min-width: 0;
+  /* the gutter owns the left inset; the pre keeps only a hair so the scroll cut sits
+     right where the code starts */
+  padding-left: 0;
+}
+
+/* Line numbers: opt-in per fence via ```ts showLineNumbers. Grid display collapses the
+   newline text nodes between line spans so each [data-line] becomes its own row; the
+   absolute ::before gutter hangs outside the line's padding, so soft-wrapped
+   continuations (code wraps here, it doesn't scroll) indent past the numbers instead
+   of colliding with them. Counters aren't real text, so copy stays number-free. */
+.article-flow figure[data-rehype-pretty-code-figure] code[data-line-numbers] {
+  display: grid;
+  counter-reset: line;
+}
+.article-flow figure[data-rehype-pretty-code-figure] code[data-line-numbers] > [data-line] {
+  position: relative;
+  padding-left: 2.25rem;
+}
+.article-flow figure[data-rehype-pretty-code-figure] code[data-line-numbers] > [data-line]::before {
+  counter-increment: line;
+  content: counter(line);
+  position: absolute;
+  left: 0;
+  /* left-aligned at the pre's own padding edge, so the numbers sit flush with the
+     filename in the header band above (2026-08-30) */
+  text-align: left;
+  color: color-mix(in oklab, var(--color-muted) 60%, transparent);
+}
+
+/* FOOTNOTES — the site's ONE footnote anatomy, for both paths: GFM `[^1]` in articles
+   (remark emits <section data-footnotes> with an <ol>) and hand-built footnotes on
+   bespoke pages (give the <ol> class="footnote-list"). Definitions are muted prose with
+   a hanging indent (wrapped lines align under the text, not the number); refs and the ↩
+   backref stay accent red even once :visited, because they are navigation, not reading
+   history. Unlayered on purpose so these win over the element mappings' utilities.
+   Change footnote styling HERE and only here. */
+section[data-footnotes] ol,
+ol.footnote-list {
+  list-style: decimal outside;
+  padding-left: 1.25em;
+  color: var(--color-muted);
+  margin-bottom: 0;
+}
+section[data-footnotes] p {
+  color: var(--color-muted);
+  margin-bottom: 0;
+}
+a[data-footnote-ref],
+a[data-footnote-ref]:visited,
+a[data-footnote-backref],
+a[data-footnote-backref]:visited {
+  color: var(--color-accent);
+  /* No underline on the number/backref marks (2026-08-28): at superscript
+     size the rule reads as clutter, and the accent color already says "link". */
+  text-decoration: none;
+}
+/* The superscript number in running text gets extra weight so it stays legible at
+   superscript size against the prose. */
+a[data-footnote-ref] {
+  font-weight: 600;
+}
+
+/* Scroll offset for anchor jumps — EVERY [id] target, not just headings, so footnotes and
+   figure permalinks also clear the fixed header instead of landing flush under it. */
+[id] {
+  scroll-margin-top: 4rem;
+}
+/* The same 4rem for scrolls the [id] margin can't reach: focus-driven scrolls (Tab landing
+   on a control above the fold) stop clear of the fixed header instead of underneath it. */
+html {
+  scroll-padding-top: 4rem;
+}
+
+/* Horizontal scroll for long code lines — scoped to highlighted blocks only */
+pre:has(code[data-theme*=" "]) {
+  overflow-x: auto;
+}
+
+/* Sideways-scrolling code SHOWS that it scrolls, two ways for two platforms.
+
+   Desktop: styling ::-webkit-scrollbar switches WebKit to a persistent bar (same
+   ghost-scrollbar language as the TOC, always visible since there may be no hover).
+
+   iOS: ::-webkit-scrollbar is NOT supported and overlay scrollbars cannot be forced
+   visible, so the affordance is scrolling SHADOWS — a soft foreground fade on the edge
+   that has more content, painted purely with background layers. The two cover gradients
+   are background-attachment: local (they scroll WITH the content and slide over the
+   shadows at the ends); the two shadow gradients are scroll-attached (pinned to the
+   box edges). Flush edge = cover hides shadow; overflowing edge = shadow peeks out.
+   A block that never overflows shows nothing. color-mix on --color-foreground keeps
+   the shadow visible in both themes. */
+main pre {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, currentColor 25%, transparent) transparent;
+  background-color: var(--color-surface-subtle);
+  background-image:
+    linear-gradient(to right, var(--color-surface-subtle) 45%, transparent),
+    linear-gradient(to left, var(--color-surface-subtle) 45%, transparent),
+    radial-gradient(farthest-side at 0 50%, color-mix(in srgb, var(--color-foreground) 16%, transparent), transparent),
+    radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--color-foreground) 16%, transparent), transparent);
+  background-position: 0 0, 100% 0, 0 0, 100% 0;
+  background-size: 2.5rem 100%, 2.5rem 100%, 0.875rem 100%, 0.875rem 100%;
+  background-repeat: no-repeat;
+  background-attachment: local, local, scroll, scroll;
+}
+
+main pre::-webkit-scrollbar {
+  height: 4px;
+}
+
+main pre::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+main pre::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 9999px;
+}
+
+/* Break long unbroken strings (e.g. a bare URL — in body text, a link, or inline code)
+   so nothing can push the article wider than the viewport on narrow screens. Applies to
+   every post via .article-flow. Fenced code blocks (pre) are intentionally excluded —
+   they scroll horizontally instead (see above). */
+.article-flow :is(p, li, blockquote, h1, h2, h3, h4, td),
+.article-flow :not(pre) > code {
+  overflow-wrap: anywhere;
+}
+
+/* Inline code in running prose — the mono face alone doesn't separate it enough from the
+   surrounding sans, so secondary ink does the rest: mono carries the shape, muted carries
+   the color. Fenced blocks (inside pre) are untouched, and shiki-highlighted inline code
+   (data-theme) keeps its own token palette. */
+.article-flow :not(pre) > code:not([data-theme]) {
+  color: var(--color-muted);
+}
+
+/* transitions-dev — error state shake */
+:root {
+  --shake-distance: 6px;
+  --shake-overshoot: 4px;
+  --shake-dur-a: 80ms;
+  --shake-dur-b: 60ms;
+  --shake-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --revert-hold: 3000ms;
+  --revert-dur: 280ms;
+}
+
+.t-input {
+  transition: border-color 150ms ease-out;
+  will-change: transform;
+}
+.t-input.is-error {
+  border-color: var(--color-accent) !important;
+  transition: border-color var(--revert-dur, 280ms) ease-out;
+}
+.t-error-msg {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity    var(--revert-dur, 280ms) ease-out,
+    visibility 0s linear var(--revert-dur, 280ms);
+}
+.t-input-wrap.is-error .t-error-msg {
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity    var(--revert-dur, 280ms) ease-out,
+    visibility 0s linear 0s;
+}
+.t-input.is-shaking {
+  animation: t-input-shake calc(var(--shake-dur-a) * 2 + var(--shake-dur-b) * 2) linear;
+}
+@keyframes t-input-shake {
+  0%     { transform: translateX(0);                                  animation-timing-function: var(--shake-ease); }
+  28.57% { transform: translateX(var(--shake-distance));              animation-timing-function: var(--shake-ease); }
+  57.14% { transform: translateX(calc(var(--shake-distance) * -1));   animation-timing-function: var(--shake-ease); }
+  78.57% { transform: translateX(var(--shake-overshoot));             animation-timing-function: var(--shake-ease); }
+  100%   { transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-input { animation: none !important; transform: none !important; }
+}
+
+/* transitions-dev — texts reveal */
+:root {
+  --stagger-dur: 500ms;
+  --stagger-distance: 12px;
+  --stagger-stagger: 40ms;
+  --stagger-blur: 3px;
+  --stagger-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.t-stagger-line {
+  display: block;
+  opacity: 0;
+  transform: translateY(var(--stagger-distance));
+  filter: blur(var(--stagger-blur));
+  transition:
+    opacity   var(--stagger-dur) var(--stagger-ease),
+    transform var(--stagger-dur) var(--stagger-ease),
+    filter    var(--stagger-dur) var(--stagger-ease);
+  will-change: transform, opacity, filter;
+}
+.t-stagger-line--2 { transition-delay: var(--stagger-stagger); }
+
+.t-stagger.is-shown .t-stagger-line {
+  opacity: 1;
+  transform: translateY(0);
+  filter: blur(0);
+}
+.t-stagger.is-hiding .t-stagger-line {
+  opacity: 0;
+  transform: translateY(0);
+  filter: blur(0);
+  transition: opacity 200ms ease, transform 0s linear, filter 0s linear;
+  transition-delay: 0s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-stagger-line { transition: none !important; }
+}
+
+/* transitions-dev — texts reveal, adapted per-WORD for the palette's rotating Tip strip.
+   Entrance is the reveal: each word rises in with a soft blur, held back 40ms from the word
+   before it. Exit stays decoupled per the skill — one quiet 200ms fade of the whole line, no
+   Y-return, so the disappearance never reads as a reverse reveal. Three-phase, JS-driven:
+   .is-exit fades the old tip out; the next tip is committed with .is-enter-start (words
+   parked down + blurred, no transition), then a reflow + class removal plays the stagger.
+   Per-word transition-delay is set inline from the word's index. */
+:root {
+  --text-swap-exit-dur: 200ms;
+  --text-swap-word-dur: 400ms;
+  --text-swap-word-distance: 6px;
+  --text-swap-word-blur: 3px;
+  --text-swap-word-stagger: 40ms;
+  --text-swap-word-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.t-text-swap {
+  display: inline-block;
+  opacity: 1;
+  transition: opacity var(--text-swap-exit-dur) ease;
+}
+.t-text-swap.is-exit {
+  opacity: 0;
+}
+.t-text-swap.is-enter-start {
+  transition: none;
+}
+
+/* Words enter via a KEYFRAME animation, not a class-toggled transition: the words are brand
+   new DOM nodes on every swap (the React key includes the tip index), and keyframes auto-play
+   on insertion — no park/reflow/release juggling, which Chrome left permanently pending for
+   same-frame-inserted nodes. fill-mode both keeps a word parked through its stagger delay. */
+.t-tip-word {
+  display: inline-block;
+  vertical-align: top;
+  animation: t-tip-word-in var(--text-swap-word-dur) var(--text-swap-word-ease) both;
+  will-change: transform, opacity, filter;
+}
+@keyframes t-tip-word-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--text-swap-word-distance));
+    filter: blur(var(--text-swap-word-blur));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-text-swap { transition: none !important; }
+  .t-tip-word { animation: none !important; }
+}
+
+/* Copy-URL confirmation popover — designed against Emil's framework, not just timed:
+   - Purpose is FEEDBACK, so it must feel instant: a small popover lives in Emil's 125-200ms
+     band, hence 180ms open / 150ms close (exits are quicker).
+   - It scales FROM the trigger origin (set per-instance via data-origin); that origin-scale IS
+     the "grows from / retreats to the button" motion, so the old -14px slide is redundant and
+     removed (pre-y: 0).
+   - Enters from a subtle scale (0.95, "start from 0.9 or higher" — never 0), never scale(0).
+   - Strong ease-out both ways (the site --ease-out token), and it stays a CSS transition so a
+     rapid re-open interrupts it cleanly. */
+:root {
+  --dropdown-open-dur: 180ms;
+  --dropdown-close-dur: 150ms;
+  --dropdown-pre-scale: 0.95;
+  --dropdown-closing-scale: 0.95;
+  --dropdown-ease: var(--ease-out);
+  --dropdown-pre-y: 0px;
+}
+
+.t-dropdown {
+  transform-origin: top left;
+  transform: scale(var(--dropdown-pre-scale)) translateY(var(--dropdown-pre-y));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--dropdown-open-dur) var(--dropdown-ease),
+    opacity   var(--dropdown-open-dur) var(--dropdown-ease);
+  will-change: transform, opacity;
+}
+.t-dropdown[data-origin="top-right"]     { transform-origin: top right; }
+.t-dropdown[data-origin="top-center"]    { transform-origin: top center; }
+.t-dropdown[data-origin="bottom-left"]   { transform-origin: bottom left; }
+.t-dropdown[data-origin="bottom-center"] { transform-origin: bottom center; }
+.t-dropdown[data-origin="bottom-right"]  { transform-origin: bottom right; }
+
+.t-dropdown.is-open {
+  transform: scale(1) translateY(0px);
+  opacity: 1;
+  pointer-events: auto;
+}
+.t-dropdown.is-closing {
+  /* Collapse back toward the trigger origin (Emil's spatial consistency) via scale alone — the
+     origin-aware scale-down IS the retreat, so no translate is needed. Quick 150ms exit. */
+  transform: scale(var(--dropdown-closing-scale)) translateY(0px);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--dropdown-close-dur) var(--dropdown-ease),
+    opacity   var(--dropdown-close-dur) var(--dropdown-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-dropdown { transition: none !important; }
+}
+
+/* Image accent border — derived from each image's average color */
+[data-img-accent] img {
+  box-shadow: inset 0 0 0 0.5px var(--img-border-lm);
+}
+.dark [data-img-accent] img {
+  box-shadow: inset 0 0 0 0.5px var(--img-border-dm);
+}
+
+/* View Transitions — entrance-only dissolve on route navigation (~80ms).
+   experimental.viewTransition (next.config.mjs) makes Next wrap every App Router
+   navigation in document.startViewTransition(). The default is a 200ms symmetric
+   cross-fade, and that read as a beat of lag on every header click: both pages sat
+   near half-opacity mid-fade, so the destination wasn't legible until ~200ms after
+   the (already prefetched, ~50ms) swap. Instead the OLD page holds solid beneath
+   (no fade-out) and only the new page fades in, fast — no dim trough, content
+   readable almost immediately, still soft enough to not read as a hard cut.
+   Runs client-side after first paint, so zero Lighthouse cold-load impact. */
+::view-transition-old(root) {
+  animation: none;
+}
+::view-transition-new(root) {
+  animation-duration: 80ms;
+  animation-timing-function: ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(*),
+  ::view-transition-new(*),
+  ::view-transition-group(*) {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-line-sweep { animation: none; }
+}
